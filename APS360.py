@@ -15,6 +15,26 @@ from sklearn.feature_extraction import FeatureHasher
 CSV_PATH = "cleaned_transaction_gtha.csv"
 TARGET_COL = "TransactionPrice"
 
+# Columns to use for modeling. Missing columns are reported and skipped.
+MODEL_COLUMNS = [
+    "LivingArea",
+    "LotSize",
+    "YearBuilt",
+    "KitchenCount",
+    "EntranceCount",
+    "PropertyStyle",
+    "BuildingType",
+    "BRPS_Style",
+    "Bath_Full",
+    "Bath_Half",
+    "Bed_Full",
+    "Bed_Half",
+    "Condition",
+    "Basement",
+    "Parking_Count",
+    "DistanceToSubj",
+]
+
 # ---- knobs you can tune ----
 LOW_CARD_MAX_UNIQUE = 200     # one-hot if column has <= this many unique values
 HASH_DIM = 2**18              # hashed feature dimension for high-card columns (262,144)
@@ -25,6 +45,15 @@ HASH_SIGNED = False           # False => nonnegative hashed features
 def main():
     # 1) Load
     df = pd.read_csv(CSV_PATH)
+
+    # 1b) Restrict to requested modeling columns when present
+    available_cols = [c for c in MODEL_COLUMNS if c in df.columns]
+    missing_cols = [c for c in MODEL_COLUMNS if c not in df.columns]
+    if missing_cols:
+        print("Warning: missing columns skipped:")
+        print("  ", ", ".join(missing_cols))
+    if available_cols:
+        df = df[available_cols + ([TARGET_COL] if TARGET_COL in df.columns else [])]
 
     # 2) Separate target
     if TARGET_COL in df.columns:
