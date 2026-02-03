@@ -29,7 +29,7 @@ from typing import Any
 
 import torch
 
-from train_ann import _make_splits, train_and_eval, train_fixed_epochs_eval_test
+from train_ann import _make_splits, train_and_eval
 
 
 def _fmt_dims(hidden_dims: list[int]) -> str:
@@ -237,20 +237,24 @@ def main() -> None:
         "dropout": float(best_phase2["dropout"]),
         "weight_decay": float(best_phase2["weight_decay"]),
         "embed_dim_cap": int(best_phase2["embed_dim_cap"]),
-        "epochs": int(best_phase2["best_val_epoch"]),
+        # We'll re-run one last time and evaluate on test exactly once.
+        # Use the same max epochs used in phase 2.
+        "epochs": int(args.refine_epochs),
     }
 
     # ------------------------------ FINAL -----------------------------------
     # Final, clean test evaluation:
-    #   - Train on (train + val)
-    #   - Train for a fixed number of epochs chosen from validation (best_val_epoch)
-    #   - Evaluate on test ONCE.
-    print("\nFinal (test-clean): train on train+val, evaluate on test once.")
-    trainval_idx = train_idx + val_idx
+    #   - Train on TRAIN only.
+    #   - Pick the best epoch by VALIDATION.
+    #   - Evaluate on TEST exactly once for this single best config.
+    #
+    # Note: We intentionally do *not* compute test metrics during phase 1/2.
+    print("\nFinal (test-clean): evaluate test once for the best validation config.")
     start = time.time()
-    final_metrics = train_fixed_epochs_eval_test(
+    final_metrics = train_and_eval(
         payload=payload,
-        train_idx=trainval_idx,
+        train_idx=train_idx,
+        val_idx=val_idx,
         test_idx=test_idx,
         batch_size=best_cfg["batch_size"],
         epochs=best_cfg["epochs"],
@@ -260,6 +264,7 @@ def main() -> None:
         dropout=best_cfg["dropout"],
         embed_dim_cap=best_cfg["embed_dim_cap"],
         seed=args.seed,
+        compute_test=True,
     )
     elapsed_s = time.time() - start
 
@@ -277,13 +282,13 @@ def main() -> None:
             "weight_decay": best_cfg["weight_decay"],
             "embed_dim_cap": best_cfg["embed_dim_cap"],
             "epochs": best_cfg["epochs"],
-            "best_val_epoch": best_cfg["epochs"],
-            "best_val_mse": "",
+            "best_val_epoch": final_metrics["best_val_epoch"],
+            "best_val_mse": final_metrics["best_val_mse"],
             "train_mse": final_metrics["train_mse"],
-            "val_mse": "",
+            "val_mse": final_metrics["val_mse"],
             "test_mse": final_metrics["test_mse"],
             "train_rmse": final_metrics["train_rmse"],
-            "val_rmse": "",
+            "val_rmse": final_metrics["val_rmse"],
             "test_rmse": final_metrics["test_rmse"],
             "n_params": final_metrics["n_params"],
             "seconds": round(elapsed_s, 2),
@@ -313,7 +318,7 @@ def main() -> None:
     )
 
     print("\nFinal test result (evaluated once):")
-    print(f"  test_rmse={final_metrics['test_rmse']:.4f}  test_mse={final_metrics['test_mse']:.6f}")
+    print(f"  test_rmse={float(final_metrics['test_rmse']):.4f}  test_mse={float(final_metrics['test_mse']):.6f}")
     print("\nSaved results:", args.out_csv)
 
 
