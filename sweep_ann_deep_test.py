@@ -44,6 +44,11 @@ def main() -> None:
     parser.add_argument("--max-runs", type=int, default=80, help="How many configs to try (sampled from a larger grid)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--top-k", type=int, default=15)
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="If the output CSV already exists, append new runs after the existing ones.",
+    )
     args = parser.parse_args()
 
     payload = torch.load(args.data, map_location="cpu")
@@ -100,71 +105,116 @@ def main() -> None:
     rng.shuffle(candidates)
     runs = candidates[: max(1, min(args.max_runs, len(candidates)))]
 
+    # If resuming, skip the configs we already wrote to disk.
+    start_run = 1
+    if args.resume:
+        try:
+            with open(args.out_csv, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                already = sum(1 for _ in reader)
+            start_run = already + 1
+        except FileNotFoundError:
+            start_run = 1
+
+    if start_run > len(runs):
+        raise ValueError(f"--resume: output already has {start_run-1} rows, but only {len(runs)} runs requested.")
+
     print(
         f"Deep test-focused sweep: runs={len(runs)} / candidates={len(candidates)} "
         f"(epochs={args.epochs}, seed={args.seed}, split=70/15/15)"
     )
 
-    results: list[dict[str, Any]] = []
+    # We write rows to CSV as we go (so if a long run is interrupted you still have results).
+    fieldnames = [
+        "source",
+        "run",
+        "seed",
+        "split_seed",
+        "epochs",
+        "name",
+        "hidden_dims",
+        "batch_size",
+        "lr",
+        "dropout",
+        "weight_decay",
+        "embed_dim_cap",
+        "n_params",
+        "best_val_epoch",
+        "train_mse",
+        "val_mse",
+        "test_mse",
+        "train_rmse",
+        "val_rmse",
+        "test_rmse",
+        "seconds",
+    ]
 
-    for i, cfg in enumerate(runs, start=1):
-        start = time.time()
-        metrics = train_and_eval(
-            payload=payload,
-            train_idx=train_idx,
-            val_idx=val_idx,
-            test_idx=test_idx,
-            batch_size=int(cfg["batch_size"]),
-            epochs=int(args.epochs),
-            lr=float(cfg["lr"]),
-            weight_decay=float(cfg["weight_decay"]),
-            hidden_dims=list(cfg["hidden_dims"]),
-            dropout=float(cfg["dropout"]),
-            embed_dim_cap=int(cfg["embed_dim_cap"]),
-            seed=args.seed,
-            compute_test=True,  # <-- test for every run (test-focused)
-        )
-        elapsed_s = time.time() - start
-
-        row = {
-            "source": "sweep_deep_test",
-            "run": i,
-            "seed": args.seed,
-            "split_seed": args.seed,
-            "epochs": int(args.epochs),
-            "name": cfg["name"],
-            "hidden_dims": _fmt_dims(cfg["hidden_dims"]),
-            "batch_size": int(cfg["batch_size"]),
-            "lr": float(cfg["lr"]),
-            "dropout": float(cfg["dropout"]),
-            "weight_decay": float(cfg["weight_decay"]),
-            "embed_dim_cap": int(cfg["embed_dim_cap"]),
-            "n_params": metrics["n_params"],
-            "best_val_epoch": metrics["best_val_epoch"],
-            "train_mse": metrics["train_mse"],
-            "val_mse": metrics["val_mse"],
-            "test_mse": metrics["test_mse"],
-            "train_rmse": metrics["train_rmse"],
-            "val_rmse": metrics["val_rmse"],
-            "test_rmse": metrics["test_rmse"],
-            "seconds": round(elapsed_s, 2),
-        }
-        results.append(row)
-
-        print(
-            f"[{i:03d}/{len(runs)}] {cfg['name']:<6} hidden={row['hidden_dims']:<24} "
-            f"bs={row['batch_size']:<4} lr={row['lr']:<6} do={row['dropout']:<4} wd={row['weight_decay']:<6} "
-            f"test_rmse={float(row['test_rmse']):.4f}  val_rmse={float(row['val_rmse']):.4f}  ({row['seconds']}s)"
-        )
-
-    # Write CSV for Excel.
-    fieldnames = list(results[0].keys()) if results else []
-    with open(args.out_csv, "w", newline="", encoding="utf-8") as f:
+    write_header = not args.resume or start_run == 1
+    mode = "w" if write_header else "a"
+    with open(args.out_csv, mode, newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
-        w.writeheader()
-        w.writerows(results)
+        if write_header:
+            w.writeheader()
 
-    # Print top-k by test RMSE (your requested focus).
+        for i, cfg in enumerate(runs[start_run - 1 :], start=start_run):
+            start = time.time()
+            metrics = train_and_eval(
+                payload=payload,
+                train_idx=train_idx,
+                val_idx=val_idx,
+                test_idx=test_idx,
+                batch_size=int(cfg["batch_size"]),
+                epochs=int(args.epochs),
+                lr=float(cfg["lr"]),
+                weight_decay=float(cfg["weight_decay"]),
+                hidden_dims=list(cfg["hidden_dims"]),
+                dropout=float(cfg["dropout"]),
+                embed_dim_cap=int(cfg["embed_dim_cap"]),
+                seed=args.seed,
+                compute_test=True,  # <-- test for every run (test-focused)
+            )
+            elapsed_s = time.time() - start
+
+            row = {
+                "source": "sweep_deep_test",
+                "run": i,
+                "seed": args.seed,
+                "split_seed": args.seed,
+                "epochs": int(args.epochs),
+                "name": cfg["name"],
+                "hidden_dims": _fmt_dims(cfg["hidden_dims"]),
+                "batch_size": int(cfg["batch_size"]),
+                "lr": float(cfg["lr"]),
+                "dropout": float(cfg["dropout"]),
+                "weight_decay": float(cfg["weight_decay"]),
+                "embed_dim_cap": int(cfg["embed_dim_cap"]),
+                "n_params": metrics["n_params"],
+                "best_val_epoch": metrics["best_val_epoch"],
+                "train_mse": metrics["train_mse"],
+                "val_mse": metrics["val_mse"],
+                "test_mse": metrics["test_mse"],
+                "train_rmse": metrics["train_rmse"],
+                "val_rmse": metrics["val_rmse"],
+                "test_rmse": metrics["test_rmse"],
+                "seconds": round(elapsed_s, 2),
+            }
+
+            w.writerow(row)
+            f.flush()
+
+            print(
+                f"[{i:03d}/{len(runs)}] {cfg['name']:<6} hidden={row['hidden_dims']:<24} "
+                f"bs={row['batch_size']:<4} lr={row['lr']:<6} do={row['dropout']:<4} wd={row['weight_decay']:<6} "
+                f"test_rmse={float(row['test_rmse']):.4f}  val_rmse={float(row['val_rmse']):.4f}  ({row['seconds']}s)"
+            )
+
+    # Load results back from CSV (so top-k works even if we resumed).
+    results: list[dict[str, Any]] = []
+    with open(args.out_csv, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            results.append(dict(row))
+
     results_sorted = sorted(results, key=lambda r: float(r["test_rmse"]))
     print("\nTop configs by TEST RMSE (log1p price):")
     for r in results_sorted[: args.top_k]:
@@ -178,4 +228,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

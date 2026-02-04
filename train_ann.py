@@ -21,6 +21,9 @@ from __future__ import annotations
 
 import argparse
 import copy
+import csv
+import time
+from pathlib import Path
 from typing import Iterable
 
 import torch
@@ -324,7 +327,13 @@ def main() -> None:
 
     # Seed affects both the split and the weight initialization.
     parser.add_argument("--seed", type=int, default=42)
+
+    # Optional: append a summary row to a CSV so all experiments can be exported to Excel.
+    parser.add_argument("--out-csv", default=None)
+    parser.add_argument("--run-name", default="")
     args = parser.parse_args()
+
+    start_time = time.time()
 
     payload = torch.load(args.data, map_location="cpu")
     n = payload["X_num"].shape[0]
@@ -345,6 +354,8 @@ def main() -> None:
         seed=args.seed,
     )
 
+    seconds = time.time() - start_time
+
     print("\nFinal summary (predicting log1p(TransactionPrice)):")
     print(f"  split: train/val/test = {args.train_frac:.2f}/{args.val_frac:.2f}/{args.test_frac:.2f}")
     print(f"  samples: n={n}  train={len(train_idx)}  val={len(val_idx)}  test={len(test_idx)}")
@@ -355,6 +366,46 @@ def main() -> None:
     print(f"  train_mse: {metrics['train_mse']:.6f}  train_rmse: {metrics['train_rmse']:.6f}")
     print(f"  val_mse:   {metrics['val_mse']:.6f}  val_rmse:   {metrics['val_rmse']:.6f}")
     print(f"  test_mse:  {metrics['test_mse']:.6f}  test_rmse:  {metrics['test_rmse']:.6f}")
+
+    if args.out_csv:
+        out_path = Path(args.out_csv)
+        write_header = not out_path.exists()
+
+        row = {
+            "source": "train_ann",
+            "stage": "single_run",
+            "run_name": args.run_name,
+            "data": args.data,
+            "feature_set": payload.get("feature_set", ""),
+            "seed": args.seed,
+            "train_frac": args.train_frac,
+            "val_frac": args.val_frac,
+            "test_frac": args.test_frac,
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "lr": args.lr,
+            "weight_decay": args.weight_decay,
+            "dropout": args.dropout,
+            "embed_dim_cap": args.embed_dim_cap,
+            "hidden_dims": ",".join(str(x) for x in hidden_dims),
+            "n_params": metrics["n_params"],
+            "best_val_epoch": metrics["best_val_epoch"],
+            "best_val_mse": metrics["best_val_mse"],
+            "train_mse": metrics["train_mse"],
+            "val_mse": metrics["val_mse"],
+            "test_mse": metrics["test_mse"],
+            "train_rmse": metrics["train_rmse"],
+            "val_rmse": metrics["val_rmse"],
+            "test_rmse": metrics["test_rmse"],
+            "seconds": round(seconds, 2),
+        }
+
+        with out_path.open("a", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=list(row.keys()))
+            if write_header:
+                w.writeheader()
+            w.writerow(row)
+        print("Wrote CSV row:", out_path)
 
 
 if __name__ == "__main__":

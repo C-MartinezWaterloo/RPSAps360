@@ -27,7 +27,12 @@ import torch
 
 
 TARGET_COL = "TransactionPrice"
-NUMERIC_COLS = [
+
+# --------------------------
+# Feature sets
+# --------------------------
+# "basic" matches what we started with (small feature set).
+NUMERIC_COLS_BASIC = [
     "LivingArea",
     "LotSize",
     "YearBuilt",
@@ -37,10 +42,37 @@ NUMERIC_COLS = [
     "Bed_Full",
     "Bed_Half",
 ]
-CAT_COLS = [
+CAT_COLS_BASIC = [
     "BuildingType",
     "PropertyStyle",
     "Condition",
+]
+
+# "full" adds location + time + a few extra property attributes.
+# This should improve accuracy substantially compared to "basic".
+NUMERIC_COLS_FULL = [
+    *NUMERIC_COLS_BASIC,
+    "gcode_Lat",
+    "gcode_Lon",
+    "TransactionYear",
+    "Quarter",
+    "DOM",
+    "Parking_Count",
+    "LandValue",
+    "ReplacementCost",
+    "KitchenCount",
+    "EntranceCount",
+]
+CAT_COLS_FULL = [
+    *CAT_COLS_BASIC,
+    "FSA",
+    "gcode_City",
+    "Basement",
+    "Parking_Type",
+    "Ownership",
+    "PropertyUse",
+    "BRPS_Style",
+    "gcode_MatchStatus",
 ]
 
 
@@ -152,6 +184,12 @@ def main() -> None:
     parser.add_argument("--csv", default="cleaned_transaction_gtha-2.csv")
     parser.add_argument("--out", default="ann_tensors.pt")
     parser.add_argument(
+        "--feature-set",
+        choices=["basic", "full"],
+        default="basic",
+        help="Which set of columns to use (default: basic).",
+    )
+    parser.add_argument(
         "--max-categories",
         type=int,
         default=None,
@@ -171,12 +209,19 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.feature_set == "basic":
+        numeric_cols = list(NUMERIC_COLS_BASIC)
+        cat_cols = list(CAT_COLS_BASIC)
+    else:
+        numeric_cols = list(NUMERIC_COLS_FULL)
+        cat_cols = list(CAT_COLS_FULL)
+
     # PASS 1 (stream over CSV):
     #   - count category frequencies (to build vocab -> integer index)
     #   - compute mean/std for numeric features (for standardization)
     #   - count how many rows we will keep (so we can pre-allocate arrays)
-    num_stats = {c: OnlineStats() for c in NUMERIC_COLS}
-    cat_counts = {c: Counter() for c in CAT_COLS}
+    num_stats = {c: OnlineStats() for c in numeric_cols}
+    cat_counts = {c: Counter() for c in cat_cols}
     n_total = 0
     n_keep = 0
     n_dropped_target = 0
@@ -185,7 +230,9 @@ def main() -> None:
         reader = csv.DictReader(f)
         if reader.fieldnames is None:
             raise ValueError("CSV has no header row.")
-        _resolve_required_columns(reader.fieldnames)
+        missing = [c for c in (numeric_cols + cat_cols + [TARGET_COL]) if c not in reader.fieldnames]
+        if missing:
+            raise ValueError(f"Missing required columns for feature-set='{args.feature_set}': {missing}")
 
         for row in reader:
             n_total += 1
@@ -200,13 +247,15 @@ def main() -> None:
 
             n_keep += 1
 
-            for col in NUMERIC_COLS:
+            for col in numeric_cols:
                 x = _parse_float(row.get(col))
                 if x is not None:
                     num_stats[col].update(x)
 
-            for col in CAT_COLS:
-                v = _clean_str(row.get(col))
+            for col in cat_cols:
+                # Normalize categoricals to reduce accidental duplicates
+                # (e.g., "Residential" vs "RESIDENTIAL").
+                v = _clean_str(row.get(col)).upper()
                 if _is_missing_token(v):
                     v = "__NA__"
                 cat_counts[col][v] += 1
@@ -214,15 +263,15 @@ def main() -> None:
     if n_keep == 0:
         raise ValueError("No rows kept; check target filtering and input data.")
 
-    num_final = {c: num_stats[c].finalize() for c in NUMERIC_COLS}
+    num_final = {c: num_stats[c].finalize() for c in numeric_cols}
     cat_maps = _build_category_maps(cat_counts, args.max_categories)
 
     # PASS 2 (stream again):
     #   - build dense numeric feature matrix (standardized)
     #   - build categorical index matrix (for embeddings)
     #   - build the target vector
-    X_num = np.zeros((n_keep, len(NUMERIC_COLS)), dtype=np.float32)
-    X_cat = np.zeros((n_keep, len(CAT_COLS)), dtype=np.int64)
+    X_num = np.zeros((n_keep, len(numeric_cols)), dtype=np.float32)
+    X_cat = np.zeros((n_keep, len(cat_cols)), dtype=np.int64)
     y = np.zeros((n_keep,), dtype=np.float32)
 
     row_i = 0
@@ -240,7 +289,7 @@ def main() -> None:
                 y_val = 0.0
             y[row_i] = float(y_val)
 
-            for j, col in enumerate(NUMERIC_COLS):
+            for j, col in enumerate(numeric_cols):
                 x = _parse_float(row.get(col))
                 mean, std = num_final[col]
                 if x is None:
@@ -254,8 +303,8 @@ def main() -> None:
                     x = 0.0
                 X_num[row_i, j] = float(x)
 
-            for j, col in enumerate(CAT_COLS):
-                v = _clean_str(row.get(col))
+            for j, col in enumerate(cat_cols):
+                v = _clean_str(row.get(col)).upper()
                 if _is_missing_token(v):
                     v = "__NA__"
                 col_map = cat_maps[col]
@@ -275,11 +324,12 @@ def main() -> None:
         "X_cat": torch.tensor(X_cat, dtype=torch.int64),
         "y": y_t,
         "y_log1p": y_log1p_t,
-        "numeric_cols": list(NUMERIC_COLS),
-        "cat_cols": list(CAT_COLS),
+        "numeric_cols": list(numeric_cols),
+        "cat_cols": list(cat_cols),
         "cat_maps": cat_maps,
-        "num_stats": {c: {"mean": float(num_final[c][0]), "std": float(num_final[c][1])} for c in NUMERIC_COLS},
+        "num_stats": {c: {"mean": float(num_final[c][0]), "std": float(num_final[c][1])} for c in numeric_cols},
         "source_csv": args.csv,
+        "feature_set": args.feature_set,
         "n_total": n_total,
         "n_kept": n_keep,
         "n_dropped_target": n_dropped_target,
@@ -292,7 +342,7 @@ def main() -> None:
     print("X_num:", payload["X_num"].shape)
     print("X_cat:", payload["X_cat"].shape)
     print("y:", payload["y"].shape)
-    for col in CAT_COLS:
+    for col in cat_cols:
         print(f"{col}: {len(cat_maps[col])} categories")
 
 

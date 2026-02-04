@@ -1,4 +1,22 @@
-cleaned_transaction_gtha.csv
-cleaned_transaction_gtha.csv
-cleaned_transaction_gtha.csv
-*.csv
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Local datasets / artifacts (do not commit to GitHub)
+cleaned_transaction_gtha*.csv
+*.pt
+
+# Office docs / notes (local)
+*.xlsx
+*.docx
+~$*.xlsx
+
+# Intermediate run logs (merged into results_all.csv)
+ann_runs.csv
+hedonic_results.csv
+sweep_results*.csv
+ann_results.xlsx
+ann_all_results.xlsx
