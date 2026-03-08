@@ -32,7 +32,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset, Subset
 
-from train_ann import _make_splits
+from train_ann import make_splits
 
 
 class HedonicDataset(Dataset):
@@ -121,6 +121,12 @@ def main() -> None:
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
+        "--split-strategy",
+        choices=["random", "time"],
+        default="random",
+        help="How to split data into train/val/test (default: random). 'time' sorts by TransactionYear/Quarter.",
+    )
+    parser.add_argument(
         "--out-csv",
         default=None,
         help="Optional: append a single summary row to this CSV (useful for Excel export).",
@@ -134,7 +140,14 @@ def main() -> None:
 
     # Same split scheme as the ANN scripts.
     n = len(ds)
-    train_idx, val_idx, test_idx = _make_splits(n, 0.70, 0.15, 0.15, args.seed)
+    train_idx, val_idx, test_idx = make_splits(
+        payload=payload,
+        train_frac=0.70,
+        val_frac=0.15,
+        test_frac=0.15,
+        seed=args.seed,
+        strategy=args.split_strategy,
+    )
 
     # DataLoaders: shuffle train, keep val/test deterministic.
     g = torch.Generator().manual_seed(args.seed)
@@ -188,6 +201,7 @@ def main() -> None:
     print("  target: log1p(TransactionPrice)")
     print(f"  samples: n={n}  train={len(train_idx)}  val={len(val_idx)}  test={len(test_idx)}")
     print(f"  device: {device.type}")
+    print(f"  split_strategy: {args.split_strategy}")
     print(f"  hyperparams: epochs={args.epochs} batch_size={args.batch_size} lr={args.lr} weight_decay={args.weight_decay}")
     print(f"  n_params: {n_params}")
     print(f"  best_val_epoch: {best_epoch}  best_val_mse: {best_val:.6f}")
@@ -204,8 +218,15 @@ def main() -> None:
             "source": "hedonic",
             "stage": "hedonic_baseline",
             "run": 1,
+            # Record the tensor file + feature set so results are comparable in `results_all.csv`.
+            "data": args.data,
+            "feature_set": payload.get("feature_set", ""),
             "seed": args.seed,
             "split_seed": args.seed,
+            "split_strategy": args.split_strategy,
+            "train_frac": 0.70,
+            "val_frac": 0.15,
+            "test_frac": 0.15,
             "epochs": args.epochs,
             "batch_size": args.batch_size,
             "lr": args.lr,

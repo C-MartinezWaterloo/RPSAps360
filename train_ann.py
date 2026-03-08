@@ -26,6 +26,7 @@ import time
 from pathlib import Path
 from typing import Iterable
 
+import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset, Subset
@@ -128,6 +129,106 @@ def _make_splits(n: int, train_frac: float, val_frac: float, test_frac: float, s
     return train_idx, val_idx, test_idx
 
 
+<<<<<<< ours
+<<<<<<< ours
+def _make_time_splits(
+    payload: dict,
+    train_frac: float,
+    val_frac: float,
+    test_frac: float,
+    seed: int,
+    *,
+    year_col: str = "TransactionYear",
+    quarter_col: str = "Quarter",
+) -> tuple[list[int], list[int], list[int]]:
+    """
+    Time-based split for "future prediction":
+      - TRAIN contains earlier transactions
+      - VAL contains middle transactions
+      - TEST contains later transactions
+
+    We build an ordering key from (TransactionYear, Quarter) and then slice
+    into 70/15/15 by count.
+
+    Notes:
+      - This requires the tensor file to include TransactionYear (and ideally Quarter)
+        in `payload["numeric_cols"]`. Use `prepare_ann_tensors.py --feature-set full`
+        or `--feature-set basic_time`.
+      - Numeric features in the tensor file are standardized; we invert
+        standardization using `payload["num_stats"]` to recover integer years/quarters.
+    """
+
+    n = int(payload["X_num"].shape[0])
+    if n <= 0:
+        raise ValueError("Dataset is empty.")
+    if abs((train_frac + val_frac + test_frac) - 1.0) > 1e-6:
+        raise ValueError("train/val/test fractions must sum to 1.0")
+
+    numeric_cols: list[str] = list(payload.get("numeric_cols", []))
+    if year_col not in numeric_cols:
+        raise ValueError(f"time split requires numeric column '{year_col}' (got: {numeric_cols})")
+
+    x_num = payload["X_num"]
+    stats = payload.get("num_stats", {})
+
+    def _recover_int(col: str) -> np.ndarray:
+        idx = numeric_cols.index(col)
+        raw = x_num[:, idx].detach().cpu().numpy().astype(np.float64)
+        if col in stats:
+            mean = float(stats[col]["mean"])
+            std = float(stats[col]["std"])
+            raw = raw * std + mean
+        return np.rint(raw).astype(np.int64)
+
+    years = _recover_int(year_col)
+    if quarter_col in numeric_cols:
+        quarters = _recover_int(quarter_col)
+    else:
+        # If Quarter isn't available, treat everything as Q1.
+        quarters = np.ones(n, dtype=np.int64)
+
+    # Build an integer time key. Quarter is 1..4, so multiplying by 10 is safe.
+    time_key = years * 10 + quarters
+
+    # Random tiebreaker within the same (year, quarter) bucket.
+    rng = np.random.default_rng(seed)
+    tie = rng.random(n)
+    order = np.lexsort((tie, time_key))  # sort by time_key, then tie
+
+    n_train = int(n * train_frac)
+    n_val = int(n * val_frac)
+    n_test = n - n_train - n_val
+    if n_train <= 0 or n_val <= 0 or n_test <= 0:
+        raise ValueError("Split produced an empty partition; adjust fractions.")
+
+    train_idx = order[:n_train].tolist()
+    val_idx = order[n_train : n_train + n_val].tolist()
+    test_idx = order[n_train + n_val :].tolist()
+    return train_idx, val_idx, test_idx
+
+
+def make_splits(
+    *,
+    payload: dict,
+    train_frac: float,
+    val_frac: float,
+    test_frac: float,
+    seed: int,
+    strategy: str,
+) -> tuple[list[int], list[int], list[int]]:
+    """Split helper shared by train/sweeps/baselines."""
+    n = int(payload["X_num"].shape[0])
+    if strategy == "random":
+        return _make_splits(n, train_frac, val_frac, test_frac, seed)
+    if strategy == "time":
+        return _make_time_splits(payload, train_frac, val_frac, test_frac, seed)
+    raise ValueError(f"Unknown split strategy: {strategy}")
+
+
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
 def _eval_mse(model: nn.Module, loader: Iterable, device: torch.device) -> float:
     """Compute mean MSE over a DataLoader (predicting log1p(price))."""
     model.eval()
@@ -327,6 +428,12 @@ def main() -> None:
 
     # Seed affects both the split and the weight initialization.
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--split-strategy",
+        choices=["random", "time"],
+        default="random",
+        help="How to split data into train/val/test (default: random). 'time' sorts by TransactionYear/Quarter.",
+    )
 
     # Optional: append a summary row to a CSV so all experiments can be exported to Excel.
     parser.add_argument("--out-csv", default=None)
@@ -336,8 +443,15 @@ def main() -> None:
     start_time = time.time()
 
     payload = torch.load(args.data, map_location="cpu")
-    n = payload["X_num"].shape[0]
-    train_idx, val_idx, test_idx = _make_splits(n, args.train_frac, args.val_frac, args.test_frac, args.seed)
+    n = int(payload["X_num"].shape[0])
+    train_idx, val_idx, test_idx = make_splits(
+        payload=payload,
+        train_frac=args.train_frac,
+        val_frac=args.val_frac,
+        test_frac=args.test_frac,
+        seed=args.seed,
+        strategy=args.split_strategy,
+    )
     hidden_dims = _parse_int_list(args.hidden_dims)
     metrics = train_and_eval(
         payload=payload,
@@ -357,7 +471,7 @@ def main() -> None:
     seconds = time.time() - start_time
 
     print("\nFinal summary (predicting log1p(TransactionPrice)):")
-    print(f"  split: train/val/test = {args.train_frac:.2f}/{args.val_frac:.2f}/{args.test_frac:.2f}")
+    print(f"  split: {args.split_strategy}  train/val/test = {args.train_frac:.2f}/{args.val_frac:.2f}/{args.test_frac:.2f}")
     print(f"  samples: n={n}  train={len(train_idx)}  val={len(val_idx)}  test={len(test_idx)}")
     print(f"  device: {metrics['device']}")
     print(f"  hyperparams: hidden_dims={hidden_dims} dropout={args.dropout} embed_dim_cap={args.embed_dim_cap} lr={args.lr} weight_decay={args.weight_decay}")
@@ -378,6 +492,8 @@ def main() -> None:
             "data": args.data,
             "feature_set": payload.get("feature_set", ""),
             "seed": args.seed,
+            "split_seed": args.seed,
+            "split_strategy": args.split_strategy,
             "train_frac": args.train_frac,
             "val_frac": args.val_frac,
             "test_frac": args.test_frac,

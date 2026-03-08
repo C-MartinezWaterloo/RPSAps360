@@ -29,7 +29,15 @@ from typing import Any
 
 import torch
 
+<<<<<<< ours
+<<<<<<< ours
+from train_ann import make_splits, train_and_eval
+=======
 from train_ann import _make_splits, train_and_eval
+>>>>>>> theirs
+=======
+from train_ann import _make_splits, train_and_eval
+>>>>>>> theirs
 
 
 def _fmt_dims(hidden_dims: list[int]) -> str:
@@ -46,13 +54,40 @@ def main() -> None:
     parser.add_argument("--refine-top", type=int, default=12, help="How many configs to re-train in phase 2")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--top-k", type=int, default=10, help="How many configs to print at the end (by val)")
+<<<<<<< ours
+<<<<<<< ours
+    parser.add_argument(
+        "--split-strategy",
+        choices=["random", "time"],
+        default="random",
+        help="How to split data into train/val/test (default: random). 'time' sorts by TransactionYear/Quarter.",
+    )
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
     args = parser.parse_args()
 
     payload = torch.load(args.data, map_location="cpu")
     n = payload["X_num"].shape[0]
 
     # Fixed split for fair comparisons.
+<<<<<<< ours
+<<<<<<< ours
+    train_idx, val_idx, test_idx = make_splits(
+        payload=payload,
+        train_frac=0.70,
+        val_frac=0.15,
+        test_frac=0.15,
+        seed=args.seed,
+        strategy=args.split_strategy,
+    )
+=======
     train_idx, val_idx, test_idx = _make_splits(n, 0.70, 0.15, 0.15, args.seed)
+>>>>>>> theirs
+=======
+    train_idx, val_idx, test_idx = _make_splits(n, 0.70, 0.15, 0.15, args.seed)
+>>>>>>> theirs
 
     # --- Config space --------------------------------------------------------
     # We build a large *candidate* grid, then shuffle+take the first N runs.
@@ -66,7 +101,16 @@ def main() -> None:
         ("big3", [1024, 512, 256]),
         ("big4", [1024, 512, 256, 128]),
     ]
+<<<<<<< ours
+<<<<<<< ours
+    # Include smaller batches too (slower but sometimes better).
+    batch_sizes = [512, 1024, 2048, 4096, 8192]
+=======
     batch_sizes = [1024, 2048, 4096, 8192, 16384]
+>>>>>>> theirs
+=======
+    batch_sizes = [1024, 2048, 4096, 8192, 16384]
+>>>>>>> theirs
     lrs = [0.0005, 0.001, 0.002, 0.003, 0.004]
     dropouts = [0.0, 0.05, 0.1, 0.2]
     weight_decays = [0.0, 1e-4, 1e-3]
@@ -97,7 +141,15 @@ def main() -> None:
     phase1 = candidates[: max(1, min(args.max_runs, len(candidates)))]
     print(
         f"Phase 1: {len(phase1)} configs (epochs={args.sweep_epochs}). "
+<<<<<<< ours
+<<<<<<< ours
+        f"Candidate grid size={len(candidates)}. Split strategy={args.split_strategy} seed={args.seed}."
+=======
         f"Candidate grid size={len(candidates)}. Split seed={args.seed}."
+>>>>>>> theirs
+=======
+        f"Candidate grid size={len(candidates)}. Split seed={args.seed}."
+>>>>>>> theirs
     )
 
     results: list[dict[str, Any]] = []
@@ -125,10 +177,25 @@ def main() -> None:
         elapsed_s = time.time() - start
 
         row = {
+<<<<<<< ours
+<<<<<<< ours
+            "data": args.data,
+            "feature_set": payload.get("feature_set", ""),
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
             "stage": "phase1",
             "run": i,
             "seed": args.seed,
             "split_seed": args.seed,
+<<<<<<< ours
+<<<<<<< ours
+            "split_strategy": args.split_strategy,
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
             "name": cfg["name"],
             "hidden_dims": _fmt_dims(cfg["hidden_dims"]),
             "batch_size": int(cfg["batch_size"]),
@@ -195,10 +262,25 @@ def main() -> None:
         elapsed_s = time.time() - start
 
         row = {
+<<<<<<< ours
+<<<<<<< ours
+            "data": args.data,
+            "feature_set": payload.get("feature_set", ""),
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
             "stage": "phase2",
             "run": j,
             "seed": args.seed,
             "split_seed": args.seed,
+<<<<<<< ours
+<<<<<<< ours
+            "split_strategy": args.split_strategy,
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
             "name": cfg["name"],
             "hidden_dims": _fmt_dims(cfg["hidden_dims"]),
             "batch_size": cfg["batch_size"],
@@ -270,10 +352,25 @@ def main() -> None:
 
     results.append(
         {
+<<<<<<< ours
+<<<<<<< ours
+            "data": args.data,
+            "feature_set": payload.get("feature_set", ""),
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
             "stage": "final_test",
             "run": 1,
             "seed": args.seed,
             "split_seed": args.seed,
+<<<<<<< ours
+<<<<<<< ours
+            "split_strategy": args.split_strategy,
+=======
+>>>>>>> theirs
+=======
+>>>>>>> theirs
             "name": best_cfg["name"],
             "hidden_dims": _fmt_dims(best_cfg["hidden_dims"]),
             "batch_size": best_cfg["batch_size"],

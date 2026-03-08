@@ -48,6 +48,16 @@ CAT_COLS_BASIC = [
     "Condition",
 ]
 
+# "basic_time" is the minimal feature set + time (TransactionYear/Quarter).
+# This is useful when you want the model to learn inflation / market trends
+# over time, without adding the other "full" extra features.
+NUMERIC_COLS_BASIC_TIME = [
+    *NUMERIC_COLS_BASIC,
+    "TransactionYear",
+    "Quarter",
+]
+CAT_COLS_BASIC_TIME = list(CAT_COLS_BASIC)
+
 # "full" adds location + time + a few extra property attributes.
 # This should improve accuracy substantially compared to "basic".
 NUMERIC_COLS_FULL = [
@@ -185,7 +195,7 @@ def main() -> None:
     parser.add_argument("--out", default="ann_tensors.pt")
     parser.add_argument(
         "--feature-set",
-        choices=["basic", "full"],
+        choices=["basic", "basic_time", "full"],
         default="basic",
         help="Which set of columns to use (default: basic).",
     )
@@ -212,6 +222,9 @@ def main() -> None:
     if args.feature_set == "basic":
         numeric_cols = list(NUMERIC_COLS_BASIC)
         cat_cols = list(CAT_COLS_BASIC)
+    elif args.feature_set == "basic_time":
+        numeric_cols = list(NUMERIC_COLS_BASIC_TIME)
+        cat_cols = list(CAT_COLS_BASIC_TIME)
     else:
         numeric_cols = list(NUMERIC_COLS_FULL)
         cat_cols = list(CAT_COLS_FULL)

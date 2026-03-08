@@ -37,6 +37,13 @@ def main() -> None:
         {
             "run": 1,
             "notes": "3 epochs baseline",
+            "data": "ann_tensors.pt",
+            "feature_set": "basic",
+            "split_seed": 42,
+            "split_strategy": "random",
+            "train_frac": 0.70,
+            "val_frac": 0.15,
+            "test_frac": 0.15,
             "epochs": 3,
             "batch_size": 4096,
             "seed": 42,
@@ -57,6 +64,13 @@ def main() -> None:
         {
             "run": 2,
             "notes": "3 epochs, low lr",
+            "data": "ann_tensors.pt",
+            "feature_set": "basic",
+            "split_seed": 42,
+            "split_strategy": "random",
+            "train_frac": 0.70,
+            "val_frac": 0.15,
+            "test_frac": 0.15,
             "epochs": 3,
             "batch_size": 4096,
             "seed": 42,
@@ -77,6 +91,13 @@ def main() -> None:
         {
             "run": 3,
             "notes": "5 epochs baseline",
+            "data": "ann_tensors.pt",
+            "feature_set": "basic",
+            "split_seed": 42,
+            "split_strategy": "random",
+            "train_frac": 0.70,
+            "val_frac": 0.15,
+            "test_frac": 0.15,
             "epochs": 5,
             "batch_size": 4096,
             "seed": 42,
@@ -97,6 +118,13 @@ def main() -> None:
         {
             "run": 4,
             "notes": "5 epochs, lr=5e-4",
+            "data": "ann_tensors.pt",
+            "feature_set": "basic",
+            "split_seed": 42,
+            "split_strategy": "random",
+            "train_frac": 0.70,
+            "val_frac": 0.15,
+            "test_frac": 0.15,
             "epochs": 5,
             "batch_size": 4096,
             "seed": 42,
@@ -117,6 +145,13 @@ def main() -> None:
         {
             "run": 5,
             "notes": "5 epochs, lr=0.002",
+            "data": "ann_tensors.pt",
+            "feature_set": "basic",
+            "split_seed": 42,
+            "split_strategy": "random",
+            "train_frac": 0.70,
+            "val_frac": 0.15,
+            "test_frac": 0.15,
             "epochs": 5,
             "batch_size": 4096,
             "seed": 42,
@@ -137,6 +172,13 @@ def main() -> None:
         {
             "run": 6,
             "notes": "smaller model",
+            "data": "ann_tensors.pt",
+            "feature_set": "basic",
+            "split_seed": 42,
+            "split_strategy": "random",
+            "train_frac": 0.70,
+            "val_frac": 0.15,
+            "test_frac": 0.15,
             "epochs": 5,
             "batch_size": 4096,
             "seed": 42,
@@ -157,6 +199,13 @@ def main() -> None:
         {
             "run": 7,
             "notes": "no dropout",
+            "data": "ann_tensors.pt",
+            "feature_set": "basic",
+            "split_seed": 42,
+            "split_strategy": "random",
+            "train_frac": 0.70,
+            "val_frac": 0.15,
+            "test_frac": 0.15,
             "epochs": 5,
             "batch_size": 4096,
             "seed": 42,
@@ -177,6 +226,13 @@ def main() -> None:
         {
             "run": 8,
             "notes": "no dropout + weight decay",
+            "data": "ann_tensors.pt",
+            "feature_set": "basic",
+            "split_seed": 42,
+            "split_strategy": "random",
+            "train_frac": 0.70,
+            "val_frac": 0.15,
+            "test_frac": 0.15,
             "epochs": 5,
             "batch_size": 4096,
             "seed": 42,
@@ -203,10 +259,11 @@ def main() -> None:
         rows_all.append({"source": "manual_runs", "stage": "manual", **r})
 
     # 2) Logged single ANN runs.
-    for row in _load_csv_rows(root / "ann_runs.csv"):
-        row.setdefault("source", "train_ann")
-        row.setdefault("stage", "single_run")
-        rows_all.append(row)
+    for path in sorted(root.glob("ann_runs*.csv")):
+        for row in _load_csv_rows(path):
+            row.setdefault("source", "train_ann")
+            row.setdefault("stage", "single_run")
+            rows_all.append(row)
 
     # 3) Sweep results (older / not test-clean).
     for row in _load_csv_rows(root / "sweep_results.csv"):
@@ -215,21 +272,24 @@ def main() -> None:
         rows_all.append(row)
 
     # 4) Sweep results (test-clean).
-    for row in _load_csv_rows(root / "sweep_results_clean.csv"):
-        row.setdefault("source", "sweep_clean")
-        rows_all.append(row)
+    for path in sorted(root.glob("sweep_results_clean*.csv")):
+        for row in _load_csv_rows(path):
+            row.setdefault("source", "sweep_clean")
+            rows_all.append(row)
 
     # 5) Deep sweep (test-focused).
-    for row in _load_csv_rows(root / "sweep_results_deep_test.csv"):
-        row.setdefault("source", "sweep_deep_test")
-        row.setdefault("stage", "sweep_deep_test")
-        rows_all.append(row)
+    for path in sorted(root.glob("sweep_results_deep_test*.csv")):
+        for row in _load_csv_rows(path):
+            row.setdefault("source", "sweep_deep_test")
+            row.setdefault("stage", "sweep_deep_test")
+            rows_all.append(row)
 
     # 6) Hedonic baseline.
-    for row in _load_csv_rows(root / "hedonic_results.csv"):
-        row.setdefault("source", "hedonic")
-        row.setdefault("stage", "hedonic_baseline")
-        rows_all.append(row)
+    for path in sorted(root.glob("hedonic_results*.csv")):
+        for row in _load_csv_rows(path):
+            row.setdefault("source", "hedonic")
+            row.setdefault("stage", "hedonic_baseline")
+            rows_all.append(row)
 
     # Build a stable header: common keys first, then the rest alphabetically.
     preferred = [
@@ -242,6 +302,7 @@ def main() -> None:
         "feature_set",
         "seed",
         "split_seed",
+        "split_strategy",
         "train_frac",
         "val_frac",
         "test_frac",

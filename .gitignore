@@ -15,8 +15,8 @@ cleaned_transaction_gtha*.csv
 ~$*.xlsx
 
 # Intermediate run logs (merged into results_all.csv)
-ann_runs.csv
-hedonic_results.csv
+ann_runs*.csv
+hedonic_results*.csv
 sweep_results*.csv
 ann_results.xlsx
 ann_all_results.xlsx

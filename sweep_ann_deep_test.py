@@ -29,7 +29,7 @@ from typing import Any
 
 import torch
 
-from train_ann import _make_splits, train_and_eval
+from train_ann import make_splits, train_and_eval
 
 
 def _fmt_dims(hidden_dims: list[int]) -> str:
@@ -45,6 +45,12 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--top-k", type=int, default=15)
     parser.add_argument(
+        "--split-strategy",
+        choices=["random", "time"],
+        default="random",
+        help="How to split data into train/val/test (default: random). 'time' sorts by TransactionYear/Quarter.",
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="If the output CSV already exists, append new runs after the existing ones.",
@@ -55,7 +61,14 @@ def main() -> None:
     n = payload["X_num"].shape[0]
 
     # Fixed split so all configs are comparable.
-    train_idx, val_idx, test_idx = _make_splits(n, 0.70, 0.15, 0.15, args.seed)
+    train_idx, val_idx, test_idx = make_splits(
+        payload=payload,
+        train_frac=0.70,
+        val_frac=0.15,
+        test_frac=0.15,
+        seed=args.seed,
+        strategy=args.split_strategy,
+    )
 
     # ---------------------------------------------------------------------
     # Config space (deeper than before). We build a grid and then sample.
@@ -73,7 +86,7 @@ def main() -> None:
     batch_sizes = [512, 1024, 2048, 4096]
 
     # Learning rates to try.
-    lrs = [0.0005, 0.001, 0.002, 0.003]
+    lrs = [0.0005, 0.001, 0.002, 0.003, 0.004]
 
     # Regularization knobs.
     dropouts = [0.0, 0.05, 0.1]
@@ -121,15 +134,18 @@ def main() -> None:
 
     print(
         f"Deep test-focused sweep: runs={len(runs)} / candidates={len(candidates)} "
-        f"(epochs={args.epochs}, seed={args.seed}, split=70/15/15)"
+        f"(epochs={args.epochs}, split_strategy={args.split_strategy}, seed={args.seed}, split=70/15/15)"
     )
 
     # We write rows to CSV as we go (so if a long run is interrupted you still have results).
     fieldnames = [
         "source",
         "run",
+        "data",
+        "feature_set",
         "seed",
         "split_seed",
+        "split_strategy",
         "epochs",
         "name",
         "hidden_dims",
@@ -178,8 +194,11 @@ def main() -> None:
             row = {
                 "source": "sweep_deep_test",
                 "run": i,
+                "data": args.data,
+                "feature_set": payload.get("feature_set", ""),
                 "seed": args.seed,
                 "split_seed": args.seed,
+                "split_strategy": args.split_strategy,
                 "epochs": int(args.epochs),
                 "name": cfg["name"],
                 "hidden_dims": _fmt_dims(cfg["hidden_dims"]),
