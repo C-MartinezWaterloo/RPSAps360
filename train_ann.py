@@ -368,10 +368,19 @@ def train_and_eval(
             best_epoch = epoch
             best_state = copy.deepcopy(model.state_dict())
 
+    # Metrics at the final epoch (can show overfitting vs best checkpoint).
+    train_eval_loader = DataLoader(Subset(ds, train_idx), batch_size=batch_size, shuffle=False)
+
+    last_train_metrics = _eval_metrics(model, train_eval_loader, device)
+    last_val_metrics = _eval_metrics(model, val_loader, device)
+    last_test_metrics = None
+    if compute_test and test_loader is not None:
+        last_test_metrics = _eval_metrics(model, test_loader, device)
+
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    train_metrics = _eval_metrics(model, train_loader, device)
+    train_metrics = _eval_metrics(model, train_eval_loader, device)
     val_metrics = _eval_metrics(model, val_loader, device)
     test_metrics = None
     if compute_test and test_loader is not None:
@@ -395,6 +404,18 @@ def train_and_eval(
         "train_acc_pct": float(train_metrics["acc_pct"]),
         "val_acc_pct": float(val_metrics["acc_pct"]),
         "test_acc_pct": None if test_metrics is None else float(test_metrics["acc_pct"]),
+        "train_mse_last": float(last_train_metrics["mse"]),
+        "val_mse_last": float(last_val_metrics["mse"]),
+        "test_mse_last": None if last_test_metrics is None else float(last_test_metrics["mse"]),
+        "train_rmse_last": float(last_train_metrics["rmse"]),
+        "val_rmse_last": float(last_val_metrics["rmse"]),
+        "test_rmse_last": None if last_test_metrics is None else float(last_test_metrics["rmse"]),
+        "train_mdape_last": float(last_train_metrics["mdape"]),
+        "val_mdape_last": float(last_val_metrics["mdape"]),
+        "test_mdape_last": None if last_test_metrics is None else float(last_test_metrics["mdape"]),
+        "train_acc_pct_last": float(last_train_metrics["acc_pct"]),
+        "val_acc_pct_last": float(last_val_metrics["acc_pct"]),
+        "test_acc_pct_last": None if last_test_metrics is None else float(last_test_metrics["acc_pct"]),
     }
 
 
@@ -544,6 +565,10 @@ def main() -> None:
     print(f"  train_acc_pct: {metrics['train_acc_pct']:.2f}%  train_mdape: {metrics['train_mdape']:.4f}")
     print(f"  val_acc_pct:   {metrics['val_acc_pct']:.2f}%  val_mdape:   {metrics['val_mdape']:.4f}")
     print(f"  test_acc_pct:  {metrics['test_acc_pct']:.2f}%  test_mdape:  {metrics['test_mdape']:.4f}")
+    print("\nLast epoch (can show overfitting if validation/test get worse):")
+    print(f"  train_acc_pct_last: {metrics['train_acc_pct_last']:.2f}%  train_mdape_last: {metrics['train_mdape_last']:.4f}")
+    print(f"  val_acc_pct_last:   {metrics['val_acc_pct_last']:.2f}%  val_mdape_last:   {metrics['val_mdape_last']:.4f}")
+    print(f"  test_acc_pct_last:  {metrics['test_acc_pct_last']:.2f}%  test_mdape_last:  {metrics['test_mdape_last']:.4f}")
 
     if args.out_csv:
         out_path = Path(args.out_csv)
@@ -583,6 +608,18 @@ def main() -> None:
             "train_acc_pct": metrics["train_acc_pct"],
             "val_acc_pct": metrics["val_acc_pct"],
             "test_acc_pct": metrics["test_acc_pct"],
+            "train_mse_last": metrics["train_mse_last"],
+            "val_mse_last": metrics["val_mse_last"],
+            "test_mse_last": metrics["test_mse_last"],
+            "train_rmse_last": metrics["train_rmse_last"],
+            "val_rmse_last": metrics["val_rmse_last"],
+            "test_rmse_last": metrics["test_rmse_last"],
+            "train_mdape_last": metrics["train_mdape_last"],
+            "val_mdape_last": metrics["val_mdape_last"],
+            "test_mdape_last": metrics["test_mdape_last"],
+            "train_acc_pct_last": metrics["train_acc_pct_last"],
+            "val_acc_pct_last": metrics["val_acc_pct_last"],
+            "test_acc_pct_last": metrics["test_acc_pct_last"],
             "seconds": round(seconds, 2),
         }
 

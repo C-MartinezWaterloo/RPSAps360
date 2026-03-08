@@ -107,28 +107,26 @@ def main() -> None:
     # ---------------------------------------------------------------------
     # Config space. We build a grid and then sample.
     # ---------------------------------------------------------------------
+    # Bigger models (as you requested).
     hidden_spaces = [
-        ("tiny2", [64, 32]),
-        ("small2", [128, 64]),
-        ("small3", [128, 64, 32]),
-        ("base2", [256, 128]),
-        ("base3", [256, 128, 64]),
-        ("wide2", [512, 256]),
-        ("wide3", [512, 256, 128]),
         ("deep4", [512, 256, 128, 64]),
-        ("big3", [1024, 512, 256]),
         ("big4", [1024, 512, 256, 128]),
         ("big5", [1024, 512, 256, 128, 64]),
+        ("deep6", [1024, 512, 512, 256, 128, 64]),
+        ("wide3", [1024, 1024, 512]),
+        ("huge3", [2048, 1024, 512]),
+        ("huge4", [2048, 1024, 512, 256]),
     ]
 
+    # Avoid tiny batches (too slow on CPU).
     batch_sizes = [1024, 2048, 4096, 8192]
 
-    lrs = [0.0003, 0.0005, 0.0007, 0.001, 0.0015, 0.002, 0.0025, 0.003, 0.004]
+    lrs = [0.001, 0.0015, 0.002, 0.003, 0.004]
 
-    dropouts = [0.0, 0.02, 0.05, 0.1, 0.15, 0.2, 0.3]
-    weight_decays = [0.0, 1e-6, 1e-5, 1e-4, 5e-4, 1e-3, 5e-3]
+    dropouts = [0.0, 0.05, 0.1, 0.2]
+    weight_decays = [0.0, 1e-6, 1e-5, 1e-4, 5e-4, 1e-3]
 
-    embed_dim_caps = [16, 32, 64, 128]
+    embed_dim_caps = [32, 64, 128]
 
     candidates: list[dict[str, Any]] = []
     for name, hidden_dims in hidden_spaces:
@@ -190,6 +188,18 @@ def main() -> None:
         "train_acc_pct",
         "val_acc_pct",
         "test_acc_pct",
+        "train_mse_last",
+        "val_mse_last",
+        "test_mse_last",
+        "train_rmse_last",
+        "val_rmse_last",
+        "test_rmse_last",
+        "train_mdape_last",
+        "val_mdape_last",
+        "test_mdape_last",
+        "train_acc_pct_last",
+        "val_acc_pct_last",
+        "test_acc_pct_last",
         "seconds",
     ]
 
@@ -281,6 +291,18 @@ def main() -> None:
                 "train_acc_pct": metrics["train_acc_pct"],
                 "val_acc_pct": metrics["val_acc_pct"],
                 "test_acc_pct": metrics["test_acc_pct"],
+                "train_mse_last": metrics["train_mse_last"],
+                "val_mse_last": metrics["val_mse_last"],
+                "test_mse_last": metrics["test_mse_last"],
+                "train_rmse_last": metrics["train_rmse_last"],
+                "val_rmse_last": metrics["val_rmse_last"],
+                "test_rmse_last": metrics["test_rmse_last"],
+                "train_mdape_last": metrics["train_mdape_last"],
+                "val_mdape_last": metrics["val_mdape_last"],
+                "test_mdape_last": metrics["test_mdape_last"],
+                "train_acc_pct_last": metrics["train_acc_pct_last"],
+                "val_acc_pct_last": metrics["val_acc_pct_last"],
+                "test_acc_pct_last": metrics["test_acc_pct_last"],
                 "seconds": round(elapsed_s, 2),
             }
 
@@ -290,7 +312,8 @@ def main() -> None:
             print(
                 f"[{i:03d}/{len(runs)}] {cfg['name']:<6} hidden={row['hidden_dims']:<24} "
                 f"bs={row['batch_size']:<4} lr={row['lr']:<6} do={row['dropout']:<4} wd={row['weight_decay']:<6} "
-                f"test_rmse={float(row['test_rmse']):.4f}  test_acc={float(row['test_acc_pct']):.2f}%  ({row['seconds']}s)"
+                f"test_rmse={float(row['test_rmse']):.4f}  test_acc={float(row['test_acc_pct']):.2f}%"
+                f" (last={float(row['test_acc_pct_last']):.2f}%)  ({row['seconds']}s)"
             )
 
     # Load results back from CSV (so top-k works even if we resumed).
@@ -304,7 +327,7 @@ def main() -> None:
     print("\nTop configs by TEST RMSE (log1p price):")
     for r in results_sorted[: args.top_k]:
         print(
-            f"  test_rmse={float(r['test_rmse']):.4f}  test_acc={float(r['test_acc_pct']):.2f}%  val_rmse={float(r['val_rmse']):.4f}  "
+            f"  test_rmse={float(r['test_rmse']):.4f}  test_acc={float(r['test_acc_pct']):.2f}% (last={float(r['test_acc_pct_last']):.2f}%)  val_rmse={float(r['val_rmse']):.4f}  "
             f"name={r['name']} hidden={r['hidden_dims']} bs={r['batch_size']} lr={r['lr']} do={r['dropout']} wd={r['weight_decay']} emb_cap={r['embed_dim_cap']}"
         )
 
