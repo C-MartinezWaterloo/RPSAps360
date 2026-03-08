@@ -129,8 +129,6 @@ def _make_splits(n: int, train_frac: float, val_frac: float, test_frac: float, s
     return train_idx, val_idx, test_idx
 
 
-<<<<<<< ours
-<<<<<<< ours
 def _make_time_splits(
     payload: dict,
     train_frac: float,
@@ -225,10 +223,6 @@ def make_splits(
     raise ValueError(f"Unknown split strategy: {strategy}")
 
 
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
 def _eval_mse(model: nn.Module, loader: Iterable, device: torch.device) -> float:
     """Compute mean MSE over a DataLoader (predicting log1p(price))."""
     model.eval()
@@ -241,6 +235,53 @@ def _eval_mse(model: nn.Module, loader: Iterable, device: torch.device) -> float
             total += float(loss_fn(pred, y.to(device)).item())
             count += y.shape[0]
     return total / max(1, count)
+
+
+def _eval_metrics(model: nn.Module, loader: Iterable, device: torch.device) -> dict[str, float]:
+    """
+    Evaluate metrics for regression:
+      - MSE/RMSE in log1p(TransactionPrice) space (RMSLE-like)
+      - MAPE and a derived "accuracy %" in price space:
+          accuracy_pct = max(0, 100 * (1 - MAPE))
+    """
+
+    model.eval()
+    mse_sum_fn = nn.MSELoss(reduction="sum")
+
+    mse_sum = 0.0
+    ape_sum = 0.0
+    n = 0
+
+    eps = 1e-8
+    with torch.no_grad():
+        for x_num, x_cat, y_log1p in loader:
+            x_num = x_num.to(device)
+            x_cat = x_cat.to(device)
+            y_log1p = y_log1p.to(device)
+
+            pred_log1p = model(x_num, x_cat)
+
+            mse_sum += float(mse_sum_fn(pred_log1p, y_log1p).item())
+
+            # Price-space MAPE (percentage error). y is log1p(price).
+            y_true = torch.expm1(y_log1p)
+            y_pred = torch.expm1(pred_log1p)
+            ape = (y_pred - y_true).abs() / y_true.clamp_min(eps)
+            ape_sum += float(ape.sum().item())
+
+            n += int(y_true.shape[0])
+
+    mse = mse_sum / max(1, n)
+    rmse = mse**0.5
+    mape = ape_sum / max(1, n)
+    acc_pct = max(0.0, 100.0 * (1.0 - mape))
+
+    return {
+        "mse": float(mse),
+        "rmse": float(rmse),
+        "mape": float(mape),
+        "acc_pct": float(acc_pct),
+    }
 
 
 def train_and_eval(
@@ -320,11 +361,11 @@ def train_and_eval(
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    train_mse = _eval_mse(model, train_loader, device)
-    val_mse = _eval_mse(model, val_loader, device)
-    test_mse = None
+    train_metrics = _eval_metrics(model, train_loader, device)
+    val_metrics = _eval_metrics(model, val_loader, device)
+    test_metrics = None
     if compute_test and test_loader is not None:
-        test_mse = _eval_mse(model, test_loader, device)
+        test_metrics = _eval_metrics(model, test_loader, device)
 
     n_params = sum(p.numel() for p in model.parameters())
     return {
@@ -332,12 +373,18 @@ def train_and_eval(
         "n_params": int(n_params),
         "best_val_epoch": int(best_epoch),
         "best_val_mse": float(best_val),
-        "train_mse": float(train_mse),
-        "val_mse": float(val_mse),
-        "test_mse": None if test_mse is None else float(test_mse),
-        "train_rmse": float(train_mse**0.5),
-        "val_rmse": float(val_mse**0.5),
-        "test_rmse": None if test_mse is None else float(test_mse**0.5),
+        "train_mse": float(train_metrics["mse"]),
+        "val_mse": float(val_metrics["mse"]),
+        "test_mse": None if test_metrics is None else float(test_metrics["mse"]),
+        "train_rmse": float(train_metrics["rmse"]),
+        "val_rmse": float(val_metrics["rmse"]),
+        "test_rmse": None if test_metrics is None else float(test_metrics["rmse"]),
+        "train_mape": float(train_metrics["mape"]),
+        "val_mape": float(val_metrics["mape"]),
+        "test_mape": None if test_metrics is None else float(test_metrics["mape"]),
+        "train_acc_pct": float(train_metrics["acc_pct"]),
+        "val_acc_pct": float(val_metrics["acc_pct"]),
+        "test_acc_pct": None if test_metrics is None else float(test_metrics["acc_pct"]),
     }
 
 
@@ -397,16 +444,20 @@ def train_fixed_epochs_eval_test(
             loss.backward()
             opt.step()
 
-    train_mse = _eval_mse(model, train_loader, device)
-    test_mse = _eval_mse(model, test_loader, device)
+    train_metrics = _eval_metrics(model, train_loader, device)
+    test_metrics = _eval_metrics(model, test_loader, device)
     n_params = sum(p.numel() for p in model.parameters())
     return {
         "device": device.type,
         "n_params": int(n_params),
-        "train_mse": float(train_mse),
-        "test_mse": float(test_mse),
-        "train_rmse": float(train_mse**0.5),
-        "test_rmse": float(test_mse**0.5),
+        "train_mse": float(train_metrics["mse"]),
+        "test_mse": float(test_metrics["mse"]),
+        "train_rmse": float(train_metrics["rmse"]),
+        "test_rmse": float(test_metrics["rmse"]),
+        "train_mape": float(train_metrics["mape"]),
+        "test_mape": float(test_metrics["mape"]),
+        "train_acc_pct": float(train_metrics["acc_pct"]),
+        "test_acc_pct": float(test_metrics["acc_pct"]),
     }
 
 
@@ -480,6 +531,9 @@ def main() -> None:
     print(f"  train_mse: {metrics['train_mse']:.6f}  train_rmse: {metrics['train_rmse']:.6f}")
     print(f"  val_mse:   {metrics['val_mse']:.6f}  val_rmse:   {metrics['val_rmse']:.6f}")
     print(f"  test_mse:  {metrics['test_mse']:.6f}  test_rmse:  {metrics['test_rmse']:.6f}")
+    print(f"  train_acc_pct: {metrics['train_acc_pct']:.2f}%  train_mape: {metrics['train_mape']:.4f}")
+    print(f"  val_acc_pct:   {metrics['val_acc_pct']:.2f}%  val_mape:   {metrics['val_mape']:.4f}")
+    print(f"  test_acc_pct:  {metrics['test_acc_pct']:.2f}%  test_mape:  {metrics['test_mape']:.4f}")
 
     if args.out_csv:
         out_path = Path(args.out_csv)
@@ -513,6 +567,12 @@ def main() -> None:
             "train_rmse": metrics["train_rmse"],
             "val_rmse": metrics["val_rmse"],
             "test_rmse": metrics["test_rmse"],
+            "train_mape": metrics["train_mape"],
+            "val_mape": metrics["val_mape"],
+            "test_mape": metrics["test_mape"],
+            "train_acc_pct": metrics["train_acc_pct"],
+            "val_acc_pct": metrics["val_acc_pct"],
+            "test_acc_pct": metrics["test_acc_pct"],
             "seconds": round(seconds, 2),
         }
 

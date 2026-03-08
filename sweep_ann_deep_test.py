@@ -118,25 +118,6 @@ def main() -> None:
     rng.shuffle(candidates)
     runs = candidates[: max(1, min(args.max_runs, len(candidates)))]
 
-    # If resuming, skip the configs we already wrote to disk.
-    start_run = 1
-    if args.resume:
-        try:
-            with open(args.out_csv, newline="", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                already = sum(1 for _ in reader)
-            start_run = already + 1
-        except FileNotFoundError:
-            start_run = 1
-
-    if start_run > len(runs):
-        raise ValueError(f"--resume: output already has {start_run-1} rows, but only {len(runs)} runs requested.")
-
-    print(
-        f"Deep test-focused sweep: runs={len(runs)} / candidates={len(candidates)} "
-        f"(epochs={args.epochs}, split_strategy={args.split_strategy}, seed={args.seed}, split=70/15/15)"
-    )
-
     # We write rows to CSV as we go (so if a long run is interrupted you still have results).
     fieldnames = [
         "source",
@@ -162,8 +143,39 @@ def main() -> None:
         "train_rmse",
         "val_rmse",
         "test_rmse",
+        "train_mape",
+        "val_mape",
+        "test_mape",
+        "train_acc_pct",
+        "val_acc_pct",
+        "test_acc_pct",
         "seconds",
     ]
+
+    # If resuming, skip the configs we already wrote to disk.
+    start_run = 1
+    if args.resume:
+        try:
+            with open(args.out_csv, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                existing = reader.fieldnames or []
+                if existing and existing != fieldnames:
+                    raise ValueError(
+                        "--resume: output CSV header does not match the current script. "
+                        "Use a new --out-csv (or delete the old file) to start fresh."
+                    )
+                already = sum(1 for _ in reader)
+            start_run = already + 1
+        except FileNotFoundError:
+            start_run = 1
+
+    if start_run > len(runs):
+        raise ValueError(f"--resume: output already has {start_run-1} rows, but only {len(runs)} runs requested.")
+
+    print(
+        f"Deep test-focused sweep: runs={len(runs)} / candidates={len(candidates)} "
+        f"(epochs={args.epochs}, split_strategy={args.split_strategy}, seed={args.seed}, split=70/15/15)"
+    )
 
     write_header = not args.resume or start_run == 1
     mode = "w" if write_header else "a"
@@ -215,6 +227,12 @@ def main() -> None:
                 "train_rmse": metrics["train_rmse"],
                 "val_rmse": metrics["val_rmse"],
                 "test_rmse": metrics["test_rmse"],
+                "train_mape": metrics["train_mape"],
+                "val_mape": metrics["val_mape"],
+                "test_mape": metrics["test_mape"],
+                "train_acc_pct": metrics["train_acc_pct"],
+                "val_acc_pct": metrics["val_acc_pct"],
+                "test_acc_pct": metrics["test_acc_pct"],
                 "seconds": round(elapsed_s, 2),
             }
 
@@ -224,7 +242,7 @@ def main() -> None:
             print(
                 f"[{i:03d}/{len(runs)}] {cfg['name']:<6} hidden={row['hidden_dims']:<24} "
                 f"bs={row['batch_size']:<4} lr={row['lr']:<6} do={row['dropout']:<4} wd={row['weight_decay']:<6} "
-                f"test_rmse={float(row['test_rmse']):.4f}  val_rmse={float(row['val_rmse']):.4f}  ({row['seconds']}s)"
+                f"test_rmse={float(row['test_rmse']):.4f}  test_acc={float(row['test_acc_pct']):.2f}%  ({row['seconds']}s)"
             )
 
     # Load results back from CSV (so top-k works even if we resumed).
@@ -238,7 +256,7 @@ def main() -> None:
     print("\nTop configs by TEST RMSE (log1p price):")
     for r in results_sorted[: args.top_k]:
         print(
-            f"  test_rmse={float(r['test_rmse']):.4f}  val_rmse={float(r['val_rmse']):.4f}  "
+            f"  test_rmse={float(r['test_rmse']):.4f}  test_acc={float(r['test_acc_pct']):.2f}%  val_rmse={float(r['val_rmse']):.4f}  "
             f"name={r['name']} hidden={r['hidden_dims']} bs={r['batch_size']} lr={r['lr']} do={r['dropout']} wd={r['weight_decay']} emb_cap={r['embed_dim_cap']}"
         )
 

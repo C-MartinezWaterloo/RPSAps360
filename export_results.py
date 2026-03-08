@@ -322,6 +322,12 @@ def main() -> None:
         "train_rmse",
         "val_rmse",
         "test_rmse",
+        "train_mape",
+        "val_mape",
+        "test_mape",
+        "train_acc_pct",
+        "val_acc_pct",
+        "test_acc_pct",
         "test_price_rmse",
         "seconds",
     ]
