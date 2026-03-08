@@ -128,18 +128,35 @@ def _make_splits(n: int, train_frac: float, val_frac: float, test_frac: float, s
     return train_idx, val_idx, test_idx
 
 
-def _eval_mse(model: nn.Module, loader: Iterable, device: torch.device) -> float:
-    """Compute mean MSE over a DataLoader (predicting log1p(price))."""
+def _eval_stats(model: nn.Module, loader: Iterable, device: torch.device) -> tuple[float, float]:
+    """
+    Compute mean MSE (log-space) and accuracy percentage (price-space).
+
+    Accuracy is defined as:
+      accuracy_pct = max(0, 100 * (1 - MAPE))
+    where MAPE is computed in original price space.
+    """
     model.eval()
     loss_fn = nn.MSELoss(reduction="sum")
-    total = 0.0
+    total_mse = 0.0
+    total_ape = 0.0
     count = 0
     with torch.no_grad():
         for x_num, x_cat, y in loader:
             pred = model(x_num.to(device), x_cat.to(device))
-            total += float(loss_fn(pred, y.to(device)).item())
+            y_device = y.to(device)
+            total_mse += float(loss_fn(pred, y_device).item())
+
+            # Convert log1p(price) back to price for a percentage-style accuracy.
+            pred_price = torch.expm1(pred).clamp(min=0.0)
+            y_price = torch.expm1(y_device).clamp(min=0.0)
+            ape = torch.abs(pred_price - y_price) / torch.clamp(y_price, min=1.0)
+            total_ape += float(ape.sum().item())
             count += y.shape[0]
-    return total / max(1, count)
+    mean_mse = total_mse / max(1, count)
+    mape = total_ape / max(1, count)
+    accuracy_pct = max(0.0, 100.0 * (1.0 - mape))
+    return mean_mse, accuracy_pct
 
 
 def train_and_eval(
@@ -210,7 +227,7 @@ def train_and_eval(
             loss.backward()
             opt.step()
 
-        val_mse = _eval_mse(model, val_loader, device)
+        val_mse, _val_acc = _eval_stats(model, val_loader, device)
         if val_mse < best_val:
             best_val = val_mse
             best_epoch = epoch
@@ -219,11 +236,12 @@ def train_and_eval(
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    train_mse = _eval_mse(model, train_loader, device)
-    val_mse = _eval_mse(model, val_loader, device)
+    train_mse, train_acc_pct = _eval_stats(model, train_loader, device)
+    val_mse, val_acc_pct = _eval_stats(model, val_loader, device)
     test_mse = None
+    test_acc_pct = None
     if compute_test and test_loader is not None:
-        test_mse = _eval_mse(model, test_loader, device)
+        test_mse, test_acc_pct = _eval_stats(model, test_loader, device)
 
     n_params = sum(p.numel() for p in model.parameters())
     return {
@@ -237,6 +255,9 @@ def train_and_eval(
         "train_rmse": float(train_mse**0.5),
         "val_rmse": float(val_mse**0.5),
         "test_rmse": None if test_mse is None else float(test_mse**0.5),
+        "train_accuracy_pct": float(train_acc_pct),
+        "val_accuracy_pct": float(val_acc_pct),
+        "test_accuracy_pct": None if test_acc_pct is None else float(test_acc_pct),
     }
 
 
@@ -296,8 +317,8 @@ def train_fixed_epochs_eval_test(
             loss.backward()
             opt.step()
 
-    train_mse = _eval_mse(model, train_loader, device)
-    test_mse = _eval_mse(model, test_loader, device)
+    train_mse, train_acc_pct = _eval_stats(model, train_loader, device)
+    test_mse, test_acc_pct = _eval_stats(model, test_loader, device)
     n_params = sum(p.numel() for p in model.parameters())
     return {
         "device": device.type,
@@ -306,6 +327,8 @@ def train_fixed_epochs_eval_test(
         "test_mse": float(test_mse),
         "train_rmse": float(train_mse**0.5),
         "test_rmse": float(test_mse**0.5),
+        "train_accuracy_pct": float(train_acc_pct),
+        "test_accuracy_pct": float(test_acc_pct),
     }
 
 
@@ -366,6 +389,10 @@ def main() -> None:
     print(f"  train_mse: {metrics['train_mse']:.6f}  train_rmse: {metrics['train_rmse']:.6f}")
     print(f"  val_mse:   {metrics['val_mse']:.6f}  val_rmse:   {metrics['val_rmse']:.6f}")
     print(f"  test_mse:  {metrics['test_mse']:.6f}  test_rmse:  {metrics['test_rmse']:.6f}")
+    print(
+        f"  accuracy(%): train={metrics['train_accuracy_pct']:.2f}  "
+        f"val={metrics['val_accuracy_pct']:.2f}  test={metrics['test_accuracy_pct']:.2f}"
+    )
 
     if args.out_csv:
         out_path = Path(args.out_csv)
@@ -397,6 +424,9 @@ def main() -> None:
             "train_rmse": metrics["train_rmse"],
             "val_rmse": metrics["val_rmse"],
             "test_rmse": metrics["test_rmse"],
+            "train_accuracy_pct": metrics["train_accuracy_pct"],
+            "val_accuracy_pct": metrics["val_accuracy_pct"],
+            "test_accuracy_pct": metrics["test_accuracy_pct"],
             "seconds": round(seconds, 2),
         }
 
