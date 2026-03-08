@@ -241,16 +241,21 @@ def _eval_metrics(model: nn.Module, loader: Iterable, device: torch.device) -> d
     """
     Evaluate metrics for regression:
       - MSE/RMSE in log1p(TransactionPrice) space (RMSLE-like)
-      - MAPE and a derived "accuracy %" in price space:
-          accuracy_pct = max(0, 100 * (1 - MAPE))
+      - MdAPE in price space (median absolute percentage error, robust to outliers)
+      - A derived "accuracy %" in price space:
+          accuracy_pct = max(0, 100 * (1 - MdAPE))
+
+    Why median instead of mean:
+      - Mean APE can be dominated by rare catastrophic price-space outliers
+        (exp(log-error) explodes). Median is much more stable.
     """
 
     model.eval()
     mse_sum_fn = nn.MSELoss(reduction="sum")
 
     mse_sum = 0.0
-    ape_sum = 0.0
     n = 0
+    ape_chunks: list[torch.Tensor] = []
 
     eps = 1e-8
     with torch.no_grad():
@@ -260,26 +265,31 @@ def _eval_metrics(model: nn.Module, loader: Iterable, device: torch.device) -> d
             y_log1p = y_log1p.to(device)
 
             pred_log1p = model(x_num, x_cat)
-
             mse_sum += float(mse_sum_fn(pred_log1p, y_log1p).item())
 
-            # Price-space MAPE (percentage error). y is log1p(price).
+            # Price-space absolute percentage error. y is log1p(price).
             y_true = torch.expm1(y_log1p)
             y_pred = torch.expm1(pred_log1p)
             ape = (y_pred - y_true).abs() / y_true.clamp_min(eps)
-            ape_sum += float(ape.sum().item())
+            ape_chunks.append(ape.detach().cpu().view(-1))
 
             n += int(y_true.shape[0])
 
     mse = mse_sum / max(1, n)
     rmse = mse**0.5
-    mape = ape_sum / max(1, n)
-    acc_pct = max(0.0, 100.0 * (1.0 - mape))
+
+    if ape_chunks:
+        ape_all = torch.cat(ape_chunks, dim=0)
+        mdape = float(torch.median(ape_all).item())
+    else:
+        mdape = float("nan")
+
+    acc_pct = max(0.0, 100.0 * (1.0 - mdape)) if mdape == mdape else float("nan")
 
     return {
         "mse": float(mse),
         "rmse": float(rmse),
-        "mape": float(mape),
+        "mdape": float(mdape),
         "acc_pct": float(acc_pct),
     }
 
@@ -379,9 +389,9 @@ def train_and_eval(
         "train_rmse": float(train_metrics["rmse"]),
         "val_rmse": float(val_metrics["rmse"]),
         "test_rmse": None if test_metrics is None else float(test_metrics["rmse"]),
-        "train_mape": float(train_metrics["mape"]),
-        "val_mape": float(val_metrics["mape"]),
-        "test_mape": None if test_metrics is None else float(test_metrics["mape"]),
+        "train_mdape": float(train_metrics["mdape"]),
+        "val_mdape": float(val_metrics["mdape"]),
+        "test_mdape": None if test_metrics is None else float(test_metrics["mdape"]),
         "train_acc_pct": float(train_metrics["acc_pct"]),
         "val_acc_pct": float(val_metrics["acc_pct"]),
         "test_acc_pct": None if test_metrics is None else float(test_metrics["acc_pct"]),
@@ -454,8 +464,8 @@ def train_fixed_epochs_eval_test(
         "test_mse": float(test_metrics["mse"]),
         "train_rmse": float(train_metrics["rmse"]),
         "test_rmse": float(test_metrics["rmse"]),
-        "train_mape": float(train_metrics["mape"]),
-        "test_mape": float(test_metrics["mape"]),
+        "train_mdape": float(train_metrics["mdape"]),
+        "test_mdape": float(test_metrics["mdape"]),
         "train_acc_pct": float(train_metrics["acc_pct"]),
         "test_acc_pct": float(test_metrics["acc_pct"]),
     }
@@ -531,9 +541,9 @@ def main() -> None:
     print(f"  train_mse: {metrics['train_mse']:.6f}  train_rmse: {metrics['train_rmse']:.6f}")
     print(f"  val_mse:   {metrics['val_mse']:.6f}  val_rmse:   {metrics['val_rmse']:.6f}")
     print(f"  test_mse:  {metrics['test_mse']:.6f}  test_rmse:  {metrics['test_rmse']:.6f}")
-    print(f"  train_acc_pct: {metrics['train_acc_pct']:.2f}%  train_mape: {metrics['train_mape']:.4f}")
-    print(f"  val_acc_pct:   {metrics['val_acc_pct']:.2f}%  val_mape:   {metrics['val_mape']:.4f}")
-    print(f"  test_acc_pct:  {metrics['test_acc_pct']:.2f}%  test_mape:  {metrics['test_mape']:.4f}")
+    print(f"  train_acc_pct: {metrics['train_acc_pct']:.2f}%  train_mdape: {metrics['train_mdape']:.4f}")
+    print(f"  val_acc_pct:   {metrics['val_acc_pct']:.2f}%  val_mdape:   {metrics['val_mdape']:.4f}")
+    print(f"  test_acc_pct:  {metrics['test_acc_pct']:.2f}%  test_mdape:  {metrics['test_mdape']:.4f}")
 
     if args.out_csv:
         out_path = Path(args.out_csv)
@@ -567,9 +577,9 @@ def main() -> None:
             "train_rmse": metrics["train_rmse"],
             "val_rmse": metrics["val_rmse"],
             "test_rmse": metrics["test_rmse"],
-            "train_mape": metrics["train_mape"],
-            "val_mape": metrics["val_mape"],
-            "test_mape": metrics["test_mape"],
+            "train_mdape": metrics["train_mdape"],
+            "val_mdape": metrics["val_mdape"],
+            "test_mdape": metrics["test_mdape"],
             "train_acc_pct": metrics["train_acc_pct"],
             "val_acc_pct": metrics["val_acc_pct"],
             "test_acc_pct": metrics["test_acc_pct"],

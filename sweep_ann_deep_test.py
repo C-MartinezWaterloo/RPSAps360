@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import json
 import random
 import time
 from typing import Any
@@ -36,6 +38,20 @@ def _fmt_dims(hidden_dims: list[int]) -> str:
     return ",".join(str(x) for x in hidden_dims)
 
 
+def _config_id(cfg: dict[str, Any]) -> str:
+    stable = {
+        "name": cfg.get("name"),
+        "hidden_dims": list(cfg.get("hidden_dims", [])),
+        "batch_size": int(cfg.get("batch_size")),
+        "lr": float(cfg.get("lr")),
+        "dropout": float(cfg.get("dropout")),
+        "weight_decay": float(cfg.get("weight_decay")),
+        "embed_dim_cap": int(cfg.get("embed_dim_cap")),
+    }
+    s = json.dumps(stable, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(s.encode("utf-8")).hexdigest()[:10]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", default="ann_tensors.pt")
@@ -44,6 +60,12 @@ def main() -> None:
     parser.add_argument("--max-runs", type=int, default=80, help="How many configs to try (sampled from a larger grid)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--top-k", type=int, default=15)
+    parser.add_argument(
+        "--train-max-samples",
+        type=int,
+        default=None,
+        help="If set, train on a fixed random subset of the training split for speed; val/test stay full.",
+    )
     parser.add_argument(
         "--split-strategy",
         choices=["random", "time"],
@@ -61,7 +83,7 @@ def main() -> None:
     n = payload["X_num"].shape[0]
 
     # Fixed split so all configs are comparable.
-    train_idx, val_idx, test_idx = make_splits(
+    train_idx_full, val_idx, test_idx = make_splits(
         payload=payload,
         train_frac=0.70,
         val_frac=0.15,
@@ -69,31 +91,44 @@ def main() -> None:
         seed=args.seed,
         strategy=args.split_strategy,
     )
+    n_train_full = len(train_idx_full)
+    n_val = len(val_idx)
+    n_test = len(test_idx)
+
+    train_idx = train_idx_full
+    if args.train_max_samples is not None:
+        if args.train_max_samples <= 0:
+            raise ValueError("--train-max-samples must be positive.")
+        if args.train_max_samples < len(train_idx_full):
+            rng_sub = random.Random(args.seed)
+            train_idx = rng_sub.sample(train_idx_full, args.train_max_samples)
+    n_train_used = len(train_idx)
 
     # ---------------------------------------------------------------------
-    # Config space (deeper than before). We build a grid and then sample.
+    # Config space. We build a grid and then sample.
     # ---------------------------------------------------------------------
     hidden_spaces = [
-        ("deep3", [512, 256, 128]),
+        ("tiny2", [64, 32]),
+        ("small2", [128, 64]),
+        ("small3", [128, 64, 32]),
+        ("base2", [256, 128]),
+        ("base3", [256, 128, 64]),
+        ("wide2", [512, 256]),
+        ("wide3", [512, 256, 128]),
         ("deep4", [512, 256, 128, 64]),
-        ("deep5", [1024, 512, 256, 128, 64]),
-        ("deep6", [1024, 512, 512, 256, 128, 64]),
-        ("deep6b", [2048, 1024, 512, 256, 128, 64]),
-        ("deep7", [2048, 1024, 512, 512, 256, 128, 64]),
+        ("big3", [1024, 512, 256]),
+        ("big4", [1024, 512, 256, 128]),
+        ("big5", [1024, 512, 256, 128, 64]),
     ]
 
-    # Smaller batch sizes = more gradient steps = slower, but sometimes better.
-    batch_sizes = [512, 1024, 2048, 4096]
+    batch_sizes = [1024, 2048, 4096, 8192]
 
-    # Learning rates to try.
-    lrs = [0.0005, 0.001, 0.002, 0.003, 0.004]
+    lrs = [0.0003, 0.0005, 0.0007, 0.001, 0.0015, 0.002, 0.0025, 0.003, 0.004]
 
-    # Regularization knobs.
-    dropouts = [0.0, 0.05, 0.1]
-    weight_decays = [0.0, 1e-4, 1e-3]
+    dropouts = [0.0, 0.02, 0.05, 0.1, 0.15, 0.2, 0.3]
+    weight_decays = [0.0, 1e-6, 1e-5, 1e-4, 5e-4, 1e-3, 5e-3]
 
-    # Embedding dimension cap (categoricals -> embeddings).
-    embed_dim_caps = [32, 64]
+    embed_dim_caps = [16, 32, 64, 128]
 
     candidates: list[dict[str, Any]] = []
     for name, hidden_dims in hidden_spaces:
@@ -122,11 +157,17 @@ def main() -> None:
     fieldnames = [
         "source",
         "run",
+        "config_id",
         "data",
         "feature_set",
         "seed",
         "split_seed",
         "split_strategy",
+        "train_max_samples",
+        "n_train_full",
+        "n_train_used",
+        "n_val",
+        "n_test",
         "epochs",
         "name",
         "hidden_dims",
@@ -143,9 +184,9 @@ def main() -> None:
         "train_rmse",
         "val_rmse",
         "test_rmse",
-        "train_mape",
-        "val_mape",
-        "test_mape",
+        "train_mdape",
+        "val_mdape",
+        "test_mdape",
         "train_acc_pct",
         "val_acc_pct",
         "test_acc_pct",
@@ -172,9 +213,10 @@ def main() -> None:
     if start_run > len(runs):
         raise ValueError(f"--resume: output already has {start_run-1} rows, but only {len(runs)} runs requested.")
 
+    extra = f", train_max_samples={args.train_max_samples}" if args.train_max_samples else ""
     print(
-        f"Deep test-focused sweep: runs={len(runs)} / candidates={len(candidates)} "
-        f"(epochs={args.epochs}, split_strategy={args.split_strategy}, seed={args.seed}, split=70/15/15)"
+        f"Test-focused sweep: runs={len(runs)} / candidates={len(candidates)} "
+        f"(epochs={args.epochs}, split_strategy={args.split_strategy}, seed={args.seed}, split=70/15/15{extra})"
     )
 
     write_header = not args.resume or start_run == 1
@@ -206,11 +248,17 @@ def main() -> None:
             row = {
                 "source": "sweep_deep_test",
                 "run": i,
+                "config_id": _config_id(cfg),
                 "data": args.data,
                 "feature_set": payload.get("feature_set", ""),
                 "seed": args.seed,
                 "split_seed": args.seed,
                 "split_strategy": args.split_strategy,
+                "train_max_samples": "" if args.train_max_samples is None else int(args.train_max_samples),
+                "n_train_full": int(n_train_full),
+                "n_train_used": int(n_train_used),
+                "n_val": int(n_val),
+                "n_test": int(n_test),
                 "epochs": int(args.epochs),
                 "name": cfg["name"],
                 "hidden_dims": _fmt_dims(cfg["hidden_dims"]),
@@ -227,9 +275,9 @@ def main() -> None:
                 "train_rmse": metrics["train_rmse"],
                 "val_rmse": metrics["val_rmse"],
                 "test_rmse": metrics["test_rmse"],
-                "train_mape": metrics["train_mape"],
-                "val_mape": metrics["val_mape"],
-                "test_mape": metrics["test_mape"],
+                "train_mdape": metrics["train_mdape"],
+                "val_mdape": metrics["val_mdape"],
+                "test_mdape": metrics["test_mdape"],
                 "train_acc_pct": metrics["train_acc_pct"],
                 "val_acc_pct": metrics["val_acc_pct"],
                 "test_acc_pct": metrics["test_acc_pct"],
