@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import csv
 import time
 from pathlib import Path
 from typing import Iterable
@@ -30,6 +29,8 @@ import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset, Subset
+
+from csv_utils import append_row
 
 
 class TensorDataset(Dataset):
@@ -572,8 +573,6 @@ def main() -> None:
 
     if args.out_csv:
         out_path = Path(args.out_csv)
-        write_header = not out_path.exists()
-
         row = {
             "source": "train_ann",
             "stage": "single_run",
@@ -622,12 +621,7 @@ def main() -> None:
             "test_acc_pct_last": metrics["test_acc_pct_last"],
             "seconds": round(seconds, 2),
         }
-
-        with out_path.open("a", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=list(row.keys()))
-            if write_header:
-                w.writeheader()
-            w.writerow(row)
+        append_row(out_path, row)
         print("Wrote CSV row:", out_path)
 
 

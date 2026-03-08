@@ -4,6 +4,8 @@ Export all experiment results into a single CSV.
 
 Goal (per your request):
   - Keep ONE canonical results file for GitHub: `results_all.csv`
+  - Keep *all* results ever recorded in that file, even if intermediate logs
+    are deleted later.
   - Merge everything we ran so far:
       * manual runs (hard-coded below)
       * single ANN runs (ann_runs.csv)
@@ -26,10 +28,93 @@ def _load_csv_rows(path: Path) -> list[dict]:
         reader = csv.DictReader(f)
         return [dict(row) for row in reader]
 
+def _infer_feature_set(row: dict) -> str:
+    data = str(row.get("data", "")).strip()
+    feature_set = str(row.get("feature_set", "")).strip()
+    if feature_set:
+        return feature_set
+    # Backfill for older tensors that didn't store feature_set (ex: ann_tensors.pt).
+    if "basic_time" in data:
+        return "basic_time"
+    if "full" in data:
+        return "full"
+    if data.endswith("ann_tensors.pt"):
+        return "basic"
+    return ""
+
+
+def _ensure_defaults(row: dict) -> None:
+    """
+    Ensure rows have consistent minimal metadata for filtering/plotting.
+
+    We intentionally do *not* overwrite values that already exist in the row.
+    """
+    source = str(row.get("source", "")).strip()
+
+    # Stage defaults (keeps sheets readable across many result sources).
+    if "stage" not in row or not str(row.get("stage", "")).strip():
+        if source in {"manual_runs"}:
+            row["stage"] = "manual"
+        elif source in {"train_ann"}:
+            row["stage"] = "single_run"
+        elif source in {"sweep_dirty"}:
+            row["stage"] = "sweep_dirty"
+        elif source in {"sweep_clean"}:
+            row["stage"] = "sweep_clean"
+        elif source in {"sweep_deep_test"}:
+            row["stage"] = "sweep_deep_test"
+        elif source in {"hedonic"}:
+            row["stage"] = "hedonic_baseline"
+        elif source in {"train_fm", "sweep_fm"}:
+            row["stage"] = "fm"
+
+    # Model defaults (so you can quickly group by family).
+    if "model" not in row or not str(row.get("model", "")).strip():
+        if source in {"manual_runs", "train_ann", "sweep_dirty", "sweep_clean", "sweep_deep_test"}:
+            row["model"] = "ann_mlp"
+        elif source == "hedonic":
+            row["model"] = "hedonic_linear_fixed_effects"
+        elif source in {"train_fm", "sweep_fm"}:
+            row["model"] = "factorization_machine"
+
+    # Backfill feature_set when missing.
+    inferred = _infer_feature_set(row)
+    if inferred and (("feature_set" not in row) or (not str(row.get("feature_set", "")).strip())):
+        row["feature_set"] = inferred
+
+
+def _row_signature(row: dict) -> tuple[tuple[str, str], ...]:
+    """
+    Stable, order-independent signature for de-duplicating rows across inputs.
+
+    We ignore a small set of bookkeeping fields so the same run coming from
+    different source files collapses to one row.
+    """
+    ignore_keys = {"run_group"}
+    items: list[tuple[str, str]] = []
+    for k, v in row.items():
+        if k in ignore_keys:
+            continue
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s == "":
+            continue
+        items.append((str(k).strip(), s))
+    return tuple(sorted(items))
+
 
 def main() -> None:
     root = Path(__file__).resolve().parent
     out_csv = root / "results_all.csv"
+
+    rows_all: list[dict] = []
+
+    # 0) Start from the existing canonical results file so we never lose history,
+    # even if intermediate logs are deleted.
+    for row in _load_csv_rows(out_csv):
+        _ensure_defaults(row)
+        rows_all.append(row)
 
     # These are the specific configs/metrics we ran earlier (before the big sweep)
     # using `train_ann.py` with a 70/15/15 split and seed=42.
@@ -252,52 +337,84 @@ def main() -> None:
         },
     ]
 
-    rows_all: list[dict] = []
-
     # 1) Manual runs (already numeric).
     for r in manual_runs:
-        rows_all.append({"source": "manual_runs", "stage": "manual", **r})
+        row = {"source": "manual_runs", "run_group": "manual_runs", **r}
+        _ensure_defaults(row)
+        rows_all.append(row)
 
     # 2) Logged single ANN runs.
     for path in sorted(root.glob("ann_runs*.csv")):
         for row in _load_csv_rows(path):
             row.setdefault("source", "train_ann")
-            row.setdefault("stage", "single_run")
+            row.setdefault("run_group", path.stem)
+            _ensure_defaults(row)
             rows_all.append(row)
 
-    # 3) Sweep results (older / not test-clean).
-    for row in _load_csv_rows(root / "sweep_results.csv"):
-        row.setdefault("source", "sweep_dirty")
-        row.setdefault("stage", "sweep_dirty")
-        rows_all.append(row)
+    # 3) Sweeps (all varieties, including historical tracked sweep_*.csv files).
+    sweep_paths: set[Path] = set()
+    sweep_paths.add(root / "sweep_results.csv")
+    sweep_paths.update(root.glob("sweep_results_clean*.csv"))
+    sweep_paths.update(root.glob("sweep_results_deep_test*.csv"))
+    sweep_paths.update(root.glob("sweep_*.csv"))
 
-    # 4) Sweep results (test-clean).
-    for path in sorted(root.glob("sweep_results_clean*.csv")):
+    for path in sorted(p for p in sweep_paths if p.exists()):
         for row in _load_csv_rows(path):
-            row.setdefault("source", "sweep_clean")
-            rows_all.append(row)
-
-    # 5) Deep sweep (test-focused).
-    for path in sorted(root.glob("sweep_results_deep_test*.csv")):
-        for row in _load_csv_rows(path):
-            row.setdefault("source", "sweep_deep_test")
-            row.setdefault("stage", "sweep_deep_test")
+            # Preserve explicit source if present; otherwise infer from filename.
+            if "source" not in row or not str(row.get("source", "")).strip():
+                if path.name == "sweep_results.csv":
+                    row["source"] = "sweep_dirty"
+                elif path.name.startswith("sweep_results_clean"):
+                    row["source"] = "sweep_clean"
+                else:
+                    row["source"] = "sweep_deep_test"
+            row.setdefault("run_group", path.stem)
+            _ensure_defaults(row)
             rows_all.append(row)
 
     # 6) Hedonic baseline.
     for path in sorted(root.glob("hedonic_results*.csv")):
         for row in _load_csv_rows(path):
             row.setdefault("source", "hedonic")
-            row.setdefault("stage", "hedonic_baseline")
+            row.setdefault("run_group", path.stem)
+            _ensure_defaults(row)
             rows_all.append(row)
+
+    # 7) Next model(s): Factorization Machine.
+    for path in sorted(root.glob("fm_runs*.csv")):
+        for row in _load_csv_rows(path):
+            row.setdefault("source", "train_fm")
+            row.setdefault("run_group", path.stem)
+            _ensure_defaults(row)
+            rows_all.append(row)
+
+    for path in sorted(root.glob("fm_sweep*.csv")):
+        for row in _load_csv_rows(path):
+            row.setdefault("source", "sweep_fm")
+            row.setdefault("run_group", path.stem)
+            _ensure_defaults(row)
+            rows_all.append(row)
+
+    # De-duplicate (important now that we re-ingest results_all.csv as an input).
+    deduped: list[dict] = []
+    seen: set[tuple[tuple[str, str], ...]] = set()
+    for row in rows_all:
+        sig = _row_signature(row)
+        if sig in seen:
+            continue
+        seen.add(sig)
+        deduped.append(row)
+    rows_all = deduped
 
     # Build a stable header: common keys first, then the rest alphabetically.
     preferred = [
         "source",
         "stage",
+        "run_group",
         "run",
         "run_name",
         "name",
+        "config_id",
         "data",
         "feature_set",
         "seed",
@@ -306,6 +423,12 @@ def main() -> None:
         "train_frac",
         "val_frac",
         "test_frac",
+        "candidate_offset",
+        "train_max_samples",
+        "n_train_full",
+        "n_train_used",
+        "n_val",
+        "n_test",
         "epochs",
         "batch_size",
         "lr",
@@ -313,6 +436,7 @@ def main() -> None:
         "dropout",
         "embed_dim_cap",
         "hidden_dims",
+        "factor_dim",
         "n_params",
         "best_val_epoch",
         "best_val_mse",
@@ -328,8 +452,22 @@ def main() -> None:
         "train_acc_pct",
         "val_acc_pct",
         "test_acc_pct",
+        "train_mse_last",
+        "val_mse_last",
+        "test_mse_last",
+        "train_rmse_last",
+        "val_rmse_last",
+        "test_rmse_last",
+        "train_mdape_last",
+        "val_mdape_last",
+        "test_mdape_last",
+        "train_acc_pct_last",
+        "val_acc_pct_last",
+        "test_acc_pct_last",
         "test_price_rmse",
         "seconds",
+        "model",
+        "notes",
     ]
     all_keys = {k for r in rows_all for k in r.keys()}
     header = [k for k in preferred if k in all_keys]

@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import csv
 import time
 from pathlib import Path
 from typing import Iterable
@@ -32,6 +31,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset, Subset
 
+from csv_utils import append_row
 from train_ann import make_splits
 
 
@@ -112,6 +112,52 @@ def _eval_price_rmse(model: nn.Module, loader: Iterable, device: torch.device) -
     return mse**0.5
 
 
+def _eval_metrics(model: nn.Module, loader: Iterable, device: torch.device) -> dict[str, float]:
+    """
+    Match the ANN metric schema:
+      - MSE/RMSE in log1p(price) space
+      - MdAPE in price space
+      - Accuracy% in price space: max(0, 100*(1 - MdAPE))
+    """
+
+    model.eval()
+    mse_sum = 0.0
+    n = 0
+    ape_chunks: list[torch.Tensor] = []
+
+    eps = 1e-8
+    with torch.no_grad():
+        for x_num, x_cat, y_log, y_raw in loader:
+            pred_log = model(x_num.to(device), x_cat.to(device))
+            diff = pred_log - y_log.to(device)
+            mse_sum += float((diff * diff).sum().item())
+
+            y_true = y_raw.to(device)
+            y_pred = torch.expm1(pred_log).clamp_min(0.0)
+            ape = (y_pred - y_true).abs() / y_true.clamp_min(eps)
+            ape_chunks.append(ape.detach().cpu().view(-1))
+
+            n += int(y_log.shape[0])
+
+    mse = mse_sum / max(1, n)
+    rmse = mse**0.5
+
+    if ape_chunks:
+        ape_all = torch.cat(ape_chunks, dim=0)
+        mdape = float(torch.median(ape_all).item())
+    else:
+        mdape = float("nan")
+
+    acc_pct = max(0.0, 100.0 * (1.0 - mdape)) if mdape == mdape else float("nan")
+
+    return {
+        "mse": float(mse),
+        "rmse": float(rmse),
+        "mdape": float(mdape),
+        "acc_pct": float(acc_pct),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", default="ann_tensors.pt")
@@ -186,12 +232,22 @@ def main() -> None:
         # Light progress print (keep it readable).
         print(f"epoch {epoch}/{args.epochs}  val_rmse(log1p_price)={val_rmse:.6f}")
 
+    # Metrics at the final epoch (can show overfitting vs best checkpoint).
+    train_eval_loader = DataLoader(Subset(ds, train_idx), batch_size=args.batch_size, shuffle=False)
+    last_train_metrics = _eval_metrics(model, train_eval_loader, device)
+    last_val_metrics = _eval_metrics(model, val_loader, device)
+    last_test_metrics = _eval_metrics(model, test_loader, device)
+
     if best_state is not None:
         model.load_state_dict(best_state)
 
-    train_mse, train_rmse = _eval_log_mse_and_rmse(model, train_loader, device)
-    val_mse, val_rmse = _eval_log_mse_and_rmse(model, val_loader, device)
-    test_mse, test_rmse = _eval_log_mse_and_rmse(model, test_loader, device)
+    train_metrics = _eval_metrics(model, train_eval_loader, device)
+    val_metrics = _eval_metrics(model, val_loader, device)
+    test_metrics = _eval_metrics(model, test_loader, device)
+
+    train_mse, train_rmse = float(train_metrics["mse"]), float(train_metrics["rmse"])
+    val_mse, val_rmse = float(val_metrics["mse"]), float(val_metrics["rmse"])
+    test_mse, test_rmse = float(test_metrics["mse"]), float(test_metrics["rmse"])
     test_price_rmse = _eval_price_rmse(model, test_loader, device)
 
     n_params = sum(p.numel() for p in model.parameters())
@@ -209,10 +265,21 @@ def main() -> None:
     print(f"  val_rmse(log):   {val_rmse:.6f}  val_mse(log):   {val_mse:.6f}")
     print(f"  test_rmse(log):  {test_rmse:.6f}  test_mse(log):  {test_mse:.6f}")
     print(f"  test_rmse($):    {test_price_rmse:,.2f}")
+    print(
+        "  acc_pct (best checkpoint):"
+        f" train={train_metrics['acc_pct']:.2f}%"
+        f" val={val_metrics['acc_pct']:.2f}%"
+        f" test={test_metrics['acc_pct']:.2f}%"
+    )
+    print(
+        "  acc_pct (last epoch):"
+        f" train={last_train_metrics['acc_pct']:.2f}%"
+        f" val={last_val_metrics['acc_pct']:.2f}%"
+        f" test={last_test_metrics['acc_pct']:.2f}%"
+    )
 
     if args.out_csv:
         out_path = Path(args.out_csv)
-        write_header = not out_path.exists()
         # Keep a consistent schema so export_results_excel.py can ingest it.
         row = {
             "source": "hedonic",
@@ -241,15 +308,28 @@ def main() -> None:
             "train_rmse": float(train_rmse),
             "val_rmse": float(val_rmse),
             "test_rmse": float(test_rmse),
+            "train_mdape": float(train_metrics["mdape"]),
+            "val_mdape": float(val_metrics["mdape"]),
+            "test_mdape": float(test_metrics["mdape"]),
+            "train_acc_pct": float(train_metrics["acc_pct"]),
+            "val_acc_pct": float(val_metrics["acc_pct"]),
+            "test_acc_pct": float(test_metrics["acc_pct"]),
+            "train_mse_last": float(last_train_metrics["mse"]),
+            "val_mse_last": float(last_val_metrics["mse"]),
+            "test_mse_last": float(last_test_metrics["mse"]),
+            "train_rmse_last": float(last_train_metrics["rmse"]),
+            "val_rmse_last": float(last_val_metrics["rmse"]),
+            "test_rmse_last": float(last_test_metrics["rmse"]),
+            "train_mdape_last": float(last_train_metrics["mdape"]),
+            "val_mdape_last": float(last_val_metrics["mdape"]),
+            "test_mdape_last": float(last_test_metrics["mdape"]),
+            "train_acc_pct_last": float(last_train_metrics["acc_pct"]),
+            "val_acc_pct_last": float(last_val_metrics["acc_pct"]),
+            "test_acc_pct_last": float(last_test_metrics["acc_pct"]),
             "test_price_rmse": float(test_price_rmse),
             "seconds": round(seconds, 2),
         }
-
-        with out_path.open("a", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=list(row.keys()))
-            if write_header:
-                w.writeheader()
-            w.writerow(row)
+        append_row(out_path, row)
         print("Wrote CSV row:", out_path)
 
 
