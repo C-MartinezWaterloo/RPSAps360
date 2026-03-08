@@ -58,6 +58,12 @@ def main() -> None:
     parser.add_argument("--out-csv", default="sweep_results_deep_test.csv")
     parser.add_argument("--epochs", type=int, default=20, help="Max epochs per run (best val epoch chosen within this)")
     parser.add_argument("--max-runs", type=int, default=80, help="How many configs to try (sampled from a larger grid)")
+    parser.add_argument(
+        "--candidate-offset",
+        type=int,
+        default=0,
+        help="Skip this many shuffled configs before taking --max-runs (useful for running additional batches).",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--top-k", type=int, default=15)
     parser.add_argument(
@@ -149,7 +155,12 @@ def main() -> None:
 
     rng = random.Random(args.seed)
     rng.shuffle(candidates)
-    runs = candidates[: max(1, min(args.max_runs, len(candidates)))]
+    if args.candidate_offset < 0:
+        raise ValueError("--candidate-offset must be >= 0.")
+    if args.candidate_offset >= len(candidates):
+        raise ValueError(f"--candidate-offset={args.candidate_offset} is >= candidates={len(candidates)}.")
+    end = args.candidate_offset + max(1, args.max_runs)
+    runs = candidates[args.candidate_offset : min(end, len(candidates))]
 
     # We write rows to CSV as we go (so if a long run is interrupted you still have results).
     fieldnames = [
@@ -161,6 +172,7 @@ def main() -> None:
         "seed",
         "split_seed",
         "split_strategy",
+        "candidate_offset",
         "train_max_samples",
         "n_train_full",
         "n_train_used",
@@ -226,7 +238,7 @@ def main() -> None:
     extra = f", train_max_samples={args.train_max_samples}" if args.train_max_samples else ""
     print(
         f"Test-focused sweep: runs={len(runs)} / candidates={len(candidates)} "
-        f"(epochs={args.epochs}, split_strategy={args.split_strategy}, seed={args.seed}, split=70/15/15{extra})"
+        f"(epochs={args.epochs}, split_strategy={args.split_strategy}, seed={args.seed}, offset={args.candidate_offset}, split=70/15/15{extra})"
     )
 
     write_header = not args.resume or start_run == 1
@@ -264,6 +276,7 @@ def main() -> None:
                 "seed": args.seed,
                 "split_seed": args.seed,
                 "split_strategy": args.split_strategy,
+                "candidate_offset": int(args.candidate_offset),
                 "train_max_samples": "" if args.train_max_samples is None else int(args.train_max_samples),
                 "n_train_full": int(n_train_full),
                 "n_train_used": int(n_train_used),
