@@ -69,6 +69,8 @@ def _ensure_defaults(row: dict) -> None:
             row["stage"] = "fm"
         elif source in {"train_deepfm", "sweep_deepfm"}:
             row["stage"] = "deepfm"
+        elif source in {"train_tabnet", "sweep_tabnet"}:
+            row["stage"] = "tabnet"
 
     # Model defaults (so you can quickly group by family).
     if "model" not in row or not str(row.get("model", "")).strip():
@@ -80,6 +82,8 @@ def _ensure_defaults(row: dict) -> None:
             row["model"] = "factorization_machine"
         elif source in {"train_deepfm", "sweep_deepfm"}:
             row["model"] = "deepfm"
+        elif source in {"train_tabnet", "sweep_tabnet"}:
+            row["model"] = "tabnet"
 
     # Backfill feature_set when missing.
     inferred = _infer_feature_set(row)
@@ -422,6 +426,21 @@ def main() -> None:
             _ensure_defaults(row)
             rows_all.append(row)
 
+    # 9) TabNet.
+    for path in sorted(root.glob("tabnet_runs*.csv")):
+        for row in _load_csv_rows(path):
+            row.setdefault("source", "train_tabnet")
+            row.setdefault("run_group", path.stem)
+            _ensure_defaults(row)
+            rows_all.append(row)
+
+    for path in sorted(root.glob("tabnet_sweep*.csv")):
+        for row in _load_csv_rows(path):
+            row.setdefault("source", "sweep_tabnet")
+            row.setdefault("run_group", path.stem)
+            _ensure_defaults(row)
+            rows_all.append(row)
+
     # De-duplicate (important now that we re-ingest results_all.csv as an input).
     deduped: list[dict] = []
     seen: set[tuple[tuple[str, str], ...]] = set()
@@ -471,6 +490,14 @@ def main() -> None:
         if src == "train_deepfm":
             return (
                 "train_deepfm",
+                str(row.get("run_name", "")).strip(),
+                str(row.get("data", "")).strip(),
+                (str(row.get("split_strategy", "")).strip() or "random"),
+                str(row.get("split_seed", "")).strip(),
+            )
+        if src == "train_tabnet":
+            return (
+                "train_tabnet",
                 str(row.get("run_name", "")).strip(),
                 str(row.get("data", "")).strip(),
                 (str(row.get("split_strategy", "")).strip() or "random"),
@@ -526,6 +553,14 @@ def main() -> None:
         "weight_decay",
         "dropout",
         "embed_dim_cap",
+        "cat_dropout",
+        "n_d",
+        "n_a",
+        "n_steps",
+        "gamma",
+        "n_shared",
+        "n_independent",
+        "lambda_sparse",
         "hidden_dims",
         "factor_dim",
         "n_params",

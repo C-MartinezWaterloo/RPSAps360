@@ -24,5 +24,7 @@ fm_runs*.csv
 fm_sweep*.csv
 deepfm_runs*.csv
 deepfm_sweep*.csv
+tabnet_runs*.csv
+tabnet_sweep*.csv
 ann_results.xlsx
 ann_all_results.xlsx

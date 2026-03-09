@@ -36,7 +36,10 @@ This document summarizes what was built in this repo, what data we trained on, w
 6) **Train a DeepFM model** (`train_deepfm.py`, `sweep_deepfm.py`)
    - Combines linear terms + FM interactions + a deep MLP.
 
-7) **Merge all experiment logs into one file** (`export_results.py`)
+7) **Train a TabNet model** (`train_tabnet.py`, `sweep_tabnet.py`)
+   - Sequential feature selection with sparse masks (sparsemax).
+
+8) **Merge all experiment logs into one file** (`export_results.py`)
    - Writes the single canonical results sheet: `results_all.csv` (tracked for GitHub).
 
 ## 2) Data used (how many homes?)

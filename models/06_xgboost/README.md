@@ -1,4 +1,4 @@
-# Model 5 — XGBoost (planned)
+# Model 6 — XGBoost (planned)
 
 XGBoost is a strong baseline for tabular regression, but it requires external compiled dependencies (`xgboost`, usually `scikit-learn` tooling too).
 
