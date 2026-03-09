@@ -33,7 +33,10 @@ This document summarizes what was built in this repo, what data we trained on, w
    - A lightweight tabular model that adds **pairwise interactions** via low-rank factors.
    - Useful “middle ground” between linear hedonic regression and a deep MLP.
 
-6) **Merge all experiment logs into one file** (`export_results.py`)
+6) **Train a DeepFM model** (`train_deepfm.py`, `sweep_deepfm.py`)
+   - Combines linear terms + FM interactions + a deep MLP.
+
+7) **Merge all experiment logs into one file** (`export_results.py`)
    - Writes the single canonical results sheet: `results_all.csv` (tracked for GitHub).
 
 ## 2) Data used (how many homes?)
@@ -94,17 +97,18 @@ All results live in `results_all.csv` (openable in Excel).
 
 ### A) Full-feature comparison (MdAPE-based accuracy %)
 
-These are the best runs we logged with `test_acc_pct` available:
+These are the best runs we logged with `test_acc_pct` available (note: the ANN/FM/DeepFM sweeps cap training rows to 50,000 for speed):
 
 | Model | Feature set | Train rows | Test accuracy % | Test RMSE(log) | Notes |
 |---|---|---:|---:|---:|---|
 | Hedonic (linear fixed effects) | full | 418,549 | 87.74 | 0.2428 | Full-train baseline |
 | ANN sweep (deep_test, 100 runs) | full | 50,000 | 88.02 | 0.2564 | Best config: `huge3` (2048→1024→512) |
 | FM sweep (100 runs) | full | 50,000 | 88.33 | 0.4056 | Higher median accuracy, but much worse tail error (RMSE) |
+| DeepFM sweep (200 runs) | full | 50,000 | 89.70 | 0.2851 | Best config: `huge` + `k=16` + deep MLP (2048→1024→512) |
 
 Interpretation:
 - **Accuracy% (MdAPE)** is robust to outliers; **RMSE(log)** is sensitive to the tail.
-- FM can look strong on MdAPE while still having much worse RMSE if a small fraction of homes are predicted badly.
+- FM/DeepFM can look strong on MdAPE while still having much worse RMSE if a small fraction of homes are predicted badly.
 
 ### B) Best overall RMSE (full training)
 

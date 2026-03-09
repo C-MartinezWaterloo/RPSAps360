@@ -87,6 +87,8 @@ def main() -> None:
 
     existing_ids: set[str] = set()
     next_run = 1
+    best_by_val = None
+    best_by_test = None
     if args.resume and out_path.exists():
         existing = _load_csv_rows(out_path)
         for r in existing:
@@ -100,6 +102,23 @@ def main() -> None:
             except Exception:
                 pass
         next_run = (max(run_vals) + 1) if run_vals else (len(existing) + 1)
+
+        # Initialize best trackers from existing rows so the summary is global.
+        for r in existing:
+            try:
+                v = float(r.get("val_acc_pct", ""))
+            except Exception:
+                v = None
+            if v is not None and (best_by_val is None or v > float(best_by_val.get("val_acc_pct", "-inf"))):
+                best_by_val = r
+
+            try:
+                t = float(r.get("test_acc_pct", ""))
+            except Exception:
+                t = None
+            if t is not None and (best_by_test is None or t > float(best_by_test.get("test_acc_pct", "-inf"))):
+                best_by_test = r
+
         print(f"[resume] existing rows={len(existing)} unique_config_ids={len(existing_ids)} next_run={next_run}")
 
     payload = torch.load(args.data, map_location="cpu")
@@ -248,9 +267,6 @@ def main() -> None:
     print(f"  out_csv: {out_path}")
     print(f"  configs: target_runs={args.n_runs} generated={len(generated)} offset={args.candidate_offset} resume={args.resume}")
 
-    best_by_val = None
-    best_by_test = None
-
     for i, cfg in enumerate(generated, start=0):
         run_id = next_run + i
         start = time.time()
@@ -369,4 +385,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

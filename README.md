@@ -16,7 +16,7 @@ For a detailed write-up of the pipeline and the results, see `REPORT.md`.
 - `sweep_deepfm.py` – runs a randomized DeepFM sweep
 - `export_results.py` – merges all run logs into **one** file: `results_all.csv`
 - `results_all.csv` – **canonical** results file for GitHub
-- `models/` – short docs per model (Hedonic, ANN, FM, planned XGBoost)
+- `models/` – short docs per model (Hedonic, ANN, FM, DeepFM, planned XGBoost)
 
 ## Quick start
 1) Put the dataset CSV in the repo root (it is gitignored):
