@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """
-Run a hyperparameter sweep for the Factorization Machine (FM) model.
+Run a randomized sweep for the DeepFM model.
 
-Design goals (per request):
-  - Run many different configs (default 100) with >10 epochs available
-  - Record train/val/test metrics as percentages (MdAPE-based) + log-space RMSE
-  - Write one clean sweep CSV (gitignored) that can be merged into results_all.csv
-  - Support resume so long sweeps can be continued safely
+Outputs:
+  - Writes one sweep CSV (default: deepfm_sweep_results.csv; gitignored)
+  - Merge into the canonical `results_all.csv` via `python export_results.py`
 """
 
 from __future__ import annotations
@@ -22,7 +20,7 @@ import numpy as np
 import torch
 
 from train_ann import make_splits
-from train_fm import train_and_eval
+from train_deepfm import train_and_eval
 
 
 def _load_csv_rows(path: Path) -> list[dict]:
@@ -49,8 +47,8 @@ def _write_row(path: Path, fieldnames: list[str], row: dict) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", default="ann_tensors_full.pt")
-    parser.add_argument("--out-csv", default="fm_sweep_results.csv")
-    parser.add_argument("--n-runs", type=int, default=100)
+    parser.add_argument("--out-csv", default="deepfm_sweep_results.csv")
+    parser.add_argument("--n-runs", type=int, default=200)
 
     parser.add_argument("--split-seed", type=int, default=42)
     parser.add_argument(
@@ -70,10 +68,10 @@ def main() -> None:
         help="Optional: cap training rows for sweep speed (val/test still full). Use 0 for full train split.",
     )
 
-    parser.add_argument("--config-seed", type=int, default=0, help="Seed for randomized config sampling (not the data split).")
-    parser.add_argument("--candidate-offset", type=int, default=0, help="Skip this many *unique* configs before starting (useful for batching).")
-    parser.add_argument("--resume", action="store_true", help="Resume by skipping already-recorded config_id values in --out-csv.")
-    parser.add_argument("--reset-results", action="store_true", help="Delete --out-csv before running.")
+    parser.add_argument("--config-seed", type=int, default=0)
+    parser.add_argument("--candidate-offset", type=int, default=0)
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--reset-results", action="store_true")
     args = parser.parse_args()
 
     if args.n_runs <= 0:
@@ -87,29 +85,27 @@ def main() -> None:
     if args.reset_results and out_path.exists():
         out_path.unlink()
 
-    # Resume support.
-    existing_rows: list[dict] = []
     existing_ids: set[str] = set()
     next_run = 1
     if args.resume and out_path.exists():
-        existing_rows = _load_csv_rows(out_path)
-        for r in existing_rows:
+        existing = _load_csv_rows(out_path)
+        for r in existing:
             cid = str(r.get("config_id", "")).strip()
             if cid:
                 existing_ids.add(cid)
         run_vals = []
-        for r in existing_rows:
+        for r in existing:
             try:
                 run_vals.append(int(str(r.get("run", "")).strip()))
             except Exception:
                 pass
-        next_run = (max(run_vals) + 1) if run_vals else (len(existing_rows) + 1)
-        print(f"[resume] existing rows={len(existing_rows)} unique_config_ids={len(existing_ids)} next_run={next_run}")
+        next_run = (max(run_vals) + 1) if run_vals else (len(existing) + 1)
+        print(f"[resume] existing rows={len(existing)} unique_config_ids={len(existing_ids)} next_run={next_run}")
 
     payload = torch.load(args.data, map_location="cpu")
     n_total = int(payload["X_num"].shape[0])
 
-    train_idx, val_idx, test_idx = make_splits(
+    train_idx_full, val_idx, test_idx = make_splits(
         payload=payload,
         train_frac=args.train_frac,
         val_frac=args.val_frac,
@@ -117,24 +113,29 @@ def main() -> None:
         seed=args.split_seed,
         strategy=args.split_strategy,
     )
-
-    n_train_full = len(train_idx)
+    n_train_full = len(train_idx_full)
     n_val = len(val_idx)
     n_test = len(test_idx)
 
     if args.train_max_samples and args.train_max_samples < n_train_full:
-        train_idx_used = train_idx[: args.train_max_samples]
+        train_idx = train_idx_full[: args.train_max_samples]
     else:
-        train_idx_used = train_idx
-    n_train_used = len(train_idx_used)
+        train_idx = train_idx_full
+    n_train_used = len(train_idx)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Randomized hyperparameter search space.
+    # Search space (kept intentionally moderate for CPU).
     factor_dims = [8, 16, 32, 64]
+    hidden_spaces = [
+        ("small", [256, 128]),
+        ("mid", [512, 256]),
+        ("deep", [512, 256, 128]),
+        ("big", [1024, 512, 256]),
+        ("huge", [2048, 1024, 512]),
+    ]
     dropouts = [0.0, 0.05, 0.1, 0.2]
-    epochs = [15, 20, 30]
-    # Keep batch sizes large for sweep speed (small batches make evaluation very slow).
+    epochs = [20, 30, 40]
     batch_sizes = [4096, 8192]
     lrs = [0.001, 0.002, 0.003, 0.004, 0.005, 0.01]
     weight_decays = [0.0, 1e-6, 1e-5, 1e-4, 5e-4, 1e-3]
@@ -161,6 +162,7 @@ def main() -> None:
         "epochs",
         "name",
         "factor_dim",
+        "hidden_dims",
         "batch_size",
         "lr",
         "dropout",
@@ -196,14 +198,14 @@ def main() -> None:
         "model",
     ]
 
-    # Generate N unique configs (deterministically from config_seed), skipping:
-    #  - candidate_offset
-    #  - any config_id already recorded (resume)
     unique_seen: set[str] = set()
     generated: list[dict] = []
 
     def _sample_config() -> dict:
+        name, hidden_dims = hidden_spaces[int(rng.integers(0, len(hidden_spaces)))]
         return {
+            "name": name,
+            "hidden_dims": hidden_dims,
             "factor_dim": int(rng.choice(factor_dims)),
             "dropout": float(rng.choice(dropouts)),
             "epochs": int(rng.choice(epochs)),
@@ -212,14 +214,13 @@ def main() -> None:
             "weight_decay": float(rng.choice(weight_decays)),
         }
 
-    # Safety cap to avoid infinite loops if the space is too small.
-    max_attempts = 200_000
+    max_attempts = 400_000
     attempts = 0
     while len(generated) < args.n_runs and attempts < max_attempts:
         attempts += 1
         hp = _sample_config()
         config = {
-            "model": "factorization_machine",
+            "model": "deepfm",
             "data": args.data,
             "split_seed": int(args.split_seed),
             "split_strategy": args.split_strategy,
@@ -239,7 +240,7 @@ def main() -> None:
     if len(generated) < args.n_runs:
         print(f"[warn] Only generated {len(generated)}/{args.n_runs} unique configs after {attempts} attempts.")
 
-    print("\nFM sweep:")
+    print("\nDeepFM sweep:")
     print(f"  data: {args.data}  feature_set={payload.get('feature_set','')}")
     print(f"  split: {args.split_strategy} seed={args.split_seed}  train/val/test={args.train_frac}/{args.val_frac}/{args.test_frac}")
     print(f"  train_max_samples: {args.train_max_samples} (train_used={n_train_used}/{n_train_full})  val={n_val} test={n_test} total={n_total}")
@@ -256,15 +257,16 @@ def main() -> None:
 
         metrics = train_and_eval(
             payload=payload,
-            train_idx=train_idx_used,
+            train_idx=train_idx,
             val_idx=val_idx,
             test_idx=test_idx,
             batch_size=cfg["batch_size"],
             epochs=cfg["epochs"],
             lr=cfg["lr"],
             weight_decay=cfg["weight_decay"],
-            dropout=cfg["dropout"],
             factor_dim=cfg["factor_dim"],
+            hidden_dims=list(cfg["hidden_dims"]),
+            dropout=cfg["dropout"],
             seed=args.split_seed,
             device=device,
             compute_test=True,
@@ -272,13 +274,15 @@ def main() -> None:
 
         seconds = time.time() - start
         name = (
-            f"fm_k{cfg['factor_dim']}_d{cfg['dropout']}_e{cfg['epochs']}"
+            f"deepfm_{cfg['name']}_k{cfg['factor_dim']}"
+            f"_hd{'-'.join(str(x) for x in cfg['hidden_dims'])}"
+            f"_d{cfg['dropout']}_e{cfg['epochs']}"
             f"_bs{cfg['batch_size']}_lr{cfg['lr']}_wd{cfg['weight_decay']}"
         )
 
         row = {
-            "source": "sweep_fm",
-            "stage": "fm",
+            "source": "sweep_deepfm",
+            "stage": "deepfm",
             "run": int(run_id),
             "config_id": cfg["config_id"],
             "data": args.data,
@@ -296,11 +300,12 @@ def main() -> None:
             "epochs": int(cfg["epochs"]),
             "name": name,
             "factor_dim": int(cfg["factor_dim"]),
+            "hidden_dims": ",".join(str(x) for x in cfg["hidden_dims"]),
             "batch_size": int(cfg["batch_size"]),
             "lr": float(cfg["lr"]),
             "dropout": float(cfg["dropout"]),
             "weight_decay": float(cfg["weight_decay"]),
-            "model": "factorization_machine",
+            "model": "deepfm",
             "n_params": metrics["n_params"],
             "best_val_epoch": metrics["best_val_epoch"],
             "best_val_mse": metrics["best_val_mse"],
@@ -333,14 +338,13 @@ def main() -> None:
 
         _write_row(out_path, fieldnames, row)
 
-        # Track best configs for quick summary.
         if best_by_val is None or float(row["val_acc_pct"]) > float(best_by_val["val_acc_pct"]):
             best_by_val = row
         if best_by_test is None or float(row["test_acc_pct"]) > float(best_by_test["test_acc_pct"]):
             best_by_test = row
 
         print(
-            f"run {run_id:>4}  {name:<45}"
+            f"run {run_id:>5}  {name[:55]:<55}"
             f"  val_acc={float(row['val_acc_pct']):6.2f}%  test_acc={float(row['test_acc_pct']):6.2f}%"
             f"  (last: val={float(row['val_acc_pct_last']):6.2f}% test={float(row['test_acc_pct_last']):6.2f}%)"
             f"  sec={row['seconds']}"
@@ -365,3 +369,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

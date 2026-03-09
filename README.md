@@ -1,6 +1,6 @@
 # RPSAps360 – House Price Modeling (ANN + Baselines)
 
-This repo prepares a housing transaction dataset into PyTorch tensors, trains an ANN (with categorical embeddings), and logs results to a single CSV (`results_all.csv`).
+This repo prepares a housing transaction dataset into PyTorch tensors, trains multiple tabular models, and logs results to a single CSV (`results_all.csv`).
 
 For a detailed write-up of the pipeline and the results, see `REPORT.md`.
 
@@ -10,8 +10,13 @@ For a detailed write-up of the pipeline and the results, see `REPORT.md`.
 - `sweep_ann.py` – “test-clean” sweep (select by validation; test evaluated once)
 - `sweep_ann_deep_test.py` – deeper/longer sweep that reports test for every run (test-focused)
 - `hedonic_baseline.py` – linear “hedonic regression” baseline (fixed effects for categoricals)
+- `train_fm.py` – trains a Factorization Machine (FM) baseline (pairwise interactions)
+- `sweep_fm.py` – runs a randomized FM sweep (logs train/val/test + overfitting via `*_last`)
+- `train_deepfm.py` – trains a DeepFM model (FM + deep MLP)
+- `sweep_deepfm.py` – runs a randomized DeepFM sweep
 - `export_results.py` – merges all run logs into **one** file: `results_all.csv`
 - `results_all.csv` – **canonical** results file for GitHub
+- `models/` – short docs per model (Hedonic, ANN, FM, planned XGBoost)
 
 ## Quick start
 1) Put the dataset CSV in the repo root (it is gitignored):
@@ -44,5 +49,7 @@ python export_results.py
 This overwrites `results_all.csv` with the merged output.
 
 ## Notes
-- Metrics are reported on `log1p(TransactionPrice)` (so RMSE is effectively RMSLE).
+- Metrics include both:
+  - `*_rmse` on `log1p(TransactionPrice)` (RMSLE-like; lower is better)
+  - `*_acc_pct` in price space, derived from `MdAPE` (median absolute percentage error)
 - Large files (dataset, `.pt` tensors, Excel/doc files, intermediate sweep logs) are gitignored; only `results_all.csv` is intended to be committed.

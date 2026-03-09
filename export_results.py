@@ -67,6 +67,8 @@ def _ensure_defaults(row: dict) -> None:
             row["stage"] = "hedonic_baseline"
         elif source in {"train_fm", "sweep_fm"}:
             row["stage"] = "fm"
+        elif source in {"train_deepfm", "sweep_deepfm"}:
+            row["stage"] = "deepfm"
 
     # Model defaults (so you can quickly group by family).
     if "model" not in row or not str(row.get("model", "")).strip():
@@ -76,11 +78,21 @@ def _ensure_defaults(row: dict) -> None:
             row["model"] = "hedonic_linear_fixed_effects"
         elif source in {"train_fm", "sweep_fm"}:
             row["model"] = "factorization_machine"
+        elif source in {"train_deepfm", "sweep_deepfm"}:
+            row["model"] = "deepfm"
 
     # Backfill feature_set when missing.
     inferred = _infer_feature_set(row)
     if inferred and (("feature_set" not in row) or (not str(row.get("feature_set", "")).strip())):
         row["feature_set"] = inferred
+
+    # Backfill split metadata for older logs that omitted it.
+    if "split_strategy" not in row or not str(row.get("split_strategy", "")).strip():
+        row["split_strategy"] = "random"
+    if "split_seed" not in row or not str(row.get("split_seed", "")).strip():
+        seed = str(row.get("seed", "")).strip()
+        if seed:
+            row["split_seed"] = seed
 
 
 def _row_signature(row: dict) -> tuple[tuple[str, str], ...]:
@@ -395,6 +407,21 @@ def main() -> None:
             _ensure_defaults(row)
             rows_all.append(row)
 
+    # 8) DeepFM.
+    for path in sorted(root.glob("deepfm_runs*.csv")):
+        for row in _load_csv_rows(path):
+            row.setdefault("source", "train_deepfm")
+            row.setdefault("run_group", path.stem)
+            _ensure_defaults(row)
+            rows_all.append(row)
+
+    for path in sorted(root.glob("deepfm_sweep*.csv")):
+        for row in _load_csv_rows(path):
+            row.setdefault("source", "sweep_deepfm")
+            row.setdefault("run_group", path.stem)
+            _ensure_defaults(row)
+            rows_all.append(row)
+
     # De-duplicate (important now that we re-ingest results_all.csv as an input).
     deduped: list[dict] = []
     seen: set[tuple[tuple[str, str], ...]] = set()
@@ -405,6 +432,70 @@ def main() -> None:
         seen.add(sig)
         deduped.append(row)
     rows_all = deduped
+
+    # Merge "schema-upgrade duplicates" for single-run style logs. These happen when
+    # we add new metric columns over time and re-run the same config.
+    def _is_blank(v: object) -> bool:
+        return v is None or str(v).strip() == ""
+
+    def _identity_key(row: dict) -> tuple[str, ...] | None:
+        src = str(row.get("source", "")).strip()
+        if src == "hedonic":
+            return (
+                "hedonic",
+                str(row.get("data", "")).strip(),
+                (str(row.get("split_strategy", "")).strip() or "random"),
+                str(row.get("split_seed", "")).strip(),
+                str(row.get("train_max_samples", "")).strip(),
+                str(row.get("epochs", "")).strip(),
+                str(row.get("batch_size", "")).strip(),
+                str(row.get("lr", "")).strip(),
+                str(row.get("weight_decay", "")).strip(),
+            )
+        if src == "train_ann":
+            return (
+                "train_ann",
+                str(row.get("run_name", "")).strip(),
+                str(row.get("data", "")).strip(),
+                (str(row.get("split_strategy", "")).strip() or "random"),
+                str(row.get("split_seed", "")).strip(),
+            )
+        if src == "train_fm":
+            return (
+                "train_fm",
+                str(row.get("run_name", "")).strip(),
+                str(row.get("data", "")).strip(),
+                (str(row.get("split_strategy", "")).strip() or "random"),
+                str(row.get("split_seed", "")).strip(),
+            )
+        if src == "train_deepfm":
+            return (
+                "train_deepfm",
+                str(row.get("run_name", "")).strip(),
+                str(row.get("data", "")).strip(),
+                (str(row.get("split_strategy", "")).strip() or "random"),
+                str(row.get("split_seed", "")).strip(),
+            )
+        return None
+
+    merged_single: dict[tuple[str, ...], dict] = {}
+    passthrough: list[dict] = []
+    for row in rows_all:
+        key = _identity_key(row)
+        if key is None:
+            passthrough.append(row)
+            continue
+        if key not in merged_single:
+            merged_single[key] = dict(row)
+            continue
+        dst = merged_single[key]
+        for k, v in row.items():
+            if _is_blank(v):
+                continue
+            if k not in dst or _is_blank(dst.get(k)):
+                dst[k] = v
+
+    rows_all = passthrough + list(merged_single.values())
 
     # Build a stable header: common keys first, then the rest alphabetically.
     preferred = [

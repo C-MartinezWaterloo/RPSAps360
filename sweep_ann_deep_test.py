@@ -125,14 +125,14 @@ def main() -> None:
     ]
 
     # Avoid tiny batches (too slow on CPU).
-    batch_sizes = [1024, 2048, 4096, 8192]
+    batch_sizes = [4096, 8192]
 
     lrs = [0.001, 0.0015, 0.002, 0.003, 0.004]
 
     dropouts = [0.0, 0.05, 0.1, 0.2]
     weight_decays = [0.0, 1e-6, 1e-5, 1e-4, 5e-4, 1e-3]
 
-    embed_dim_caps = [32, 64, 128]
+    embed_dim_caps = [64]
 
     candidates: list[dict[str, Any]] = []
     for name, hidden_dims in hidden_spaces:

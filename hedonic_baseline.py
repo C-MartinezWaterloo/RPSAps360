@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import random
 import time
 from pathlib import Path
 from typing import Iterable
@@ -167,6 +168,12 @@ def main() -> None:
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
+        "--train-max-samples",
+        type=int,
+        default=None,
+        help="If set, train on a fixed random subset of the training split for speed; val/test stay full.",
+    )
+    parser.add_argument(
         "--split-strategy",
         choices=["random", "time"],
         default="random",
@@ -186,7 +193,7 @@ def main() -> None:
 
     # Same split scheme as the ANN scripts.
     n = len(ds)
-    train_idx, val_idx, test_idx = make_splits(
+    train_idx_full, val_idx, test_idx = make_splits(
         payload=payload,
         train_frac=0.70,
         val_frac=0.15,
@@ -194,6 +201,15 @@ def main() -> None:
         seed=args.seed,
         strategy=args.split_strategy,
     )
+    n_train_full = len(train_idx_full)
+    train_idx = train_idx_full
+    if args.train_max_samples is not None:
+        if args.train_max_samples <= 0:
+            raise ValueError("--train-max-samples must be positive.")
+        if args.train_max_samples < len(train_idx_full):
+            rng_sub = random.Random(args.seed)
+            train_idx = rng_sub.sample(train_idx_full, args.train_max_samples)
+    n_train_used = len(train_idx)
 
     # DataLoaders: shuffle train, keep val/test deterministic.
     g = torch.Generator().manual_seed(args.seed)
@@ -255,7 +271,8 @@ def main() -> None:
 
     print("\nHedonic regression baseline summary:")
     print("  target: log1p(TransactionPrice)")
-    print(f"  samples: n={n}  train={len(train_idx)}  val={len(val_idx)}  test={len(test_idx)}")
+    extra = f" (train_max_samples={args.train_max_samples})" if args.train_max_samples is not None else ""
+    print(f"  samples: n={n}  train={len(train_idx)} / {n_train_full}{extra}  val={len(val_idx)}  test={len(test_idx)}")
     print(f"  device: {device.type}")
     print(f"  split_strategy: {args.split_strategy}")
     print(f"  hyperparams: epochs={args.epochs} batch_size={args.batch_size} lr={args.lr} weight_decay={args.weight_decay}")
@@ -291,6 +308,11 @@ def main() -> None:
             "seed": args.seed,
             "split_seed": args.seed,
             "split_strategy": args.split_strategy,
+            "train_max_samples": "" if args.train_max_samples is None else int(args.train_max_samples),
+            "n_train_full": int(n_train_full),
+            "n_train_used": int(n_train_used),
+            "n_val": int(len(val_idx)),
+            "n_test": int(len(test_idx)),
             "train_frac": 0.70,
             "val_frac": 0.15,
             "test_frac": 0.15,

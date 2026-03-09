@@ -1,4 +1,4 @@
-# House Price Modeling Report (ANN + Hedonic Baseline)
+# House Price Modeling Report (Hedonic + ANN + FM)
 
 This document summarizes what was built in this repo, what data we trained on, what experiments were run, and what the results mean.
 
@@ -29,7 +29,11 @@ This document summarizes what was built in this repo, what data we trained on, w
      - linear weights for numeric features
      - “fixed effects” for categoricals (implemented as 1D embeddings)
 
-5) **Merge all experiment logs into one file** (`export_results.py`)
+5) **Train a Factorization Machine (FM)** (`train_fm.py`, `sweep_fm.py`)
+   - A lightweight tabular model that adds **pairwise interactions** via low-rank factors.
+   - Useful “middle ground” between linear hedonic regression and a deep MLP.
+
+6) **Merge all experiment logs into one file** (`export_results.py`)
    - Writes the single canonical results sheet: `results_all.csv` (tracked for GitHub).
 
 ## 2) Data used (how many homes?)
@@ -73,6 +77,10 @@ We train and evaluate on:
 Reported metric:
 - `RMSE(log1p(TransactionPrice))`
 
+Additional metric (for your “accuracy %” request):
+- `MdAPE` (median absolute percentage error) in **price space**
+- `accuracy_pct = max(0, 100*(1 - MdAPE))`
+
 Important:
 - **Lower RMSE is better** (we minimize error; we do *not* maximize RMSE).
 
@@ -83,6 +91,27 @@ Intuition (rough):
 ## 5) Results summary (what worked best)
 
 All results live in `results_all.csv` (openable in Excel).
+
+### A) Full-feature comparison (MdAPE-based accuracy %)
+
+These are the best runs we logged with `test_acc_pct` available:
+
+| Model | Feature set | Train rows | Test accuracy % | Test RMSE(log) | Notes |
+|---|---|---:|---:|---:|---|
+| Hedonic (linear fixed effects) | full | 418,549 | 87.74 | 0.2428 | Full-train baseline |
+| ANN sweep (deep_test, 100 runs) | full | 50,000 | 88.02 | 0.2564 | Best config: `huge3` (2048→1024→512) |
+| FM sweep (100 runs) | full | 50,000 | 88.33 | 0.4056 | Higher median accuracy, but much worse tail error (RMSE) |
+
+Interpretation:
+- **Accuracy% (MdAPE)** is robust to outliers; **RMSE(log)** is sensitive to the tail.
+- FM can look strong on MdAPE while still having much worse RMSE if a small fraction of homes are predicted badly.
+
+### B) Best overall RMSE (full training)
+
+The best run we logged on `feature_set=full` by **test RMSE(log)** (lower is better):
+- ANN (full train): **test RMSE(log1p) ≈ 0.1433**
+
+This is substantially better than the FM/ANN 50k sweeps above; those sweeps cap training rows for speed.
 
 ### Best models by feature set
 
