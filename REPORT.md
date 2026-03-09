@@ -168,6 +168,34 @@ From the `train_ann` full-feature runs:
 From `sweep_clean` (test-clean):
 - Larger/deeper networks helped, but the best clean test RMSE plateaued around **0.34**.
 
+## 6.5) Robustness checks (multiple seeds + splits)
+
+To verify the ANN’s advantage is not due to a “lucky” random partition, we reran the best full-feature ANN and the hedonic baseline across multiple **random split seeds** and **model seeds**, and also on a **time-based split** (train earlier years → test later years). These runs are logged under `source=eval_suite` in `results_all.csv`.
+
+**Random split (3 split seeds × 2 model seeds = 6 runs):**
+- ANN best config (`hidden_dims=512,256,128,64`): **test RMSE ≈ 0.1409 ± 0.0036**, **test acc% ≈ 92.77 ± 0.28**
+- Hedonic baseline: **test RMSE ≈ 0.2453 ± 0.0037**, **test acc% ≈ 87.75 ± 0.17**
+
+**Time split (2 model seeds, split_seed=42):**
+- ANN best config: **test RMSE ≈ 0.3415 ± 0.0136**, **test acc% ≈ 82.37 ± 0.75**
+- Hedonic baseline: **test RMSE ≈ 0.5957 ± 0.0210**, **test acc% ≈ 69.22 ± 1.43**
+
+Interpretation:
+- The ANN remains clearly better than hedonic regression across multiple random partitions.
+- Performance drops significantly under a time-based split (as expected), but the ANN still generalizes much better than the hedonic baseline.
+
+## 6.6) Feature importance (quick permutation analysis)
+
+To better understand *why* the ANN improves over the hedonic model, we ran a simple permutation importance analysis on a validation subset (20,000 rows; random split seed=42). Importance is measured as the increase in validation MSE when a single feature is randomly permuted.
+
+**Top drivers for both models:**
+- `LivingArea` (largest impact)
+- `TransactionYear` (captures market trend / price level)
+- Location features (`FSA`, `gcode_City`, `gcode_Lat`, `gcode_Lon`)
+
+Why the ANN can beat hedonic regression:
+- The ANN can learn **nonlinear effects** (e.g., diminishing returns to size, different year trends by location) and **interactions** (size × neighborhood, style × city, etc.), while the hedonic model is constrained to be linear in the standardized numeric features plus fixed categorical offsets.
+
 ## 7) Repro commands (exactly what to run)
 
 1) Build tensors (full feature set):
@@ -213,3 +241,11 @@ To support a forecast-style evaluation, we added:
 Interpretation:
 - Including `TransactionYear` helps the model represent nominal price changes over time, but **forecasting later years is much harder** than a random split.
 - The **full** feature set still matters a lot (location + extra attributes). “Year alone” does not get close to the full-feature ANN performance.
+
+## 10) External baselines (XGBoost / LightGBM)
+
+XGBoost/LightGBM are commonly very strong on tabular data and are worth comparing against the neural nets here. In this repo we keep them as a planned extension because the current runtime environment is intentionally minimal and does not include compiled boosting dependencies.
+
+When you’re ready to add them:
+- Train/sweep XGBoost or LightGBM using the same split logic (random + time) and the same metric columns (`*_rmse`, `*_acc_pct`, and `*_last` metrics).
+- Export their runs to a CSV and ingest into `results_all.csv` via `export_results.py`.

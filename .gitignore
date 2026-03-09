@@ -26,5 +26,7 @@ deepfm_runs*.csv
 deepfm_sweep*.csv
 tabnet_runs*.csv
 tabnet_sweep*.csv
+eval_runs*.csv
+feature_importance*.csv
 ann_results.xlsx
 ann_all_results.xlsx

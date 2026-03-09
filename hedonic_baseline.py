@@ -159,6 +159,120 @@ def _eval_metrics(model: nn.Module, loader: Iterable, device: torch.device) -> d
     }
 
 
+def train_and_eval(
+    *,
+    payload: dict,
+    train_idx: list[int],
+    val_idx: list[int],
+    test_idx: list[int],
+    epochs: int,
+    batch_size: int,
+    lr: float,
+    weight_decay: float,
+    seed: int,
+    device: torch.device | None = None,
+    compute_test: bool = True,
+) -> dict:
+    """
+    Train the hedonic baseline once and return a dict of metrics.
+
+    This mirrors the `train_ann.train_and_eval()` interface so we can run
+    consistent multi-seed evaluations.
+    """
+
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    ds = HedonicDataset(payload)
+
+    torch.manual_seed(seed)
+    g = torch.Generator().manual_seed(seed)
+
+    train_loader = DataLoader(Subset(ds, train_idx), batch_size=batch_size, shuffle=True, generator=g)
+    val_loader = DataLoader(Subset(ds, val_idx), batch_size=batch_size, shuffle=False)
+    test_loader = None
+    if compute_test:
+        test_loader = DataLoader(Subset(ds, test_idx), batch_size=batch_size, shuffle=False)
+
+    cat_sizes = [len(payload["cat_maps"][col]) for col in payload["cat_cols"]]
+    model = HedonicLinear(n_num=payload["X_num"].shape[1], cat_sizes=cat_sizes).to(device)
+
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    loss_fn = nn.MSELoss()
+
+    best_val = float("inf")
+    best_epoch = 0
+    best_state: dict | None = None
+
+    for epoch in range(1, epochs + 1):
+        model.train()
+        for x_num, x_cat, y_log, _y_raw in train_loader:
+            opt.zero_grad(set_to_none=True)
+            pred = model(x_num.to(device), x_cat.to(device))
+            loss = loss_fn(pred, y_log.to(device))
+            loss.backward()
+            opt.step()
+
+        val_mse, _val_rmse = _eval_log_mse_and_rmse(model, val_loader, device)
+        if val_mse < best_val:
+            best_val = val_mse
+            best_epoch = epoch
+            best_state = copy.deepcopy(model.state_dict())
+
+    # Metrics at the final epoch (overfitting signal).
+    train_eval_loader = DataLoader(Subset(ds, train_idx), batch_size=batch_size, shuffle=False)
+    last_train = _eval_metrics(model, train_eval_loader, device)
+    last_val = _eval_metrics(model, val_loader, device)
+    last_test = None
+    if compute_test and test_loader is not None:
+        last_test = _eval_metrics(model, test_loader, device)
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
+    train_metrics = _eval_metrics(model, train_eval_loader, device)
+    val_metrics = _eval_metrics(model, val_loader, device)
+    test_metrics = None
+    test_price_rmse = None
+    if compute_test and test_loader is not None:
+        test_metrics = _eval_metrics(model, test_loader, device)
+        test_price_rmse = _eval_price_rmse(model, test_loader, device)
+
+    n_params = sum(p.numel() for p in model.parameters())
+
+    return {
+        "device": device.type,
+        "n_params": int(n_params),
+        "best_val_epoch": int(best_epoch),
+        "best_val_mse": float(best_val),
+        "train_mse": float(train_metrics["mse"]),
+        "val_mse": float(val_metrics["mse"]),
+        "test_mse": None if test_metrics is None else float(test_metrics["mse"]),
+        "train_rmse": float(train_metrics["rmse"]),
+        "val_rmse": float(val_metrics["rmse"]),
+        "test_rmse": None if test_metrics is None else float(test_metrics["rmse"]),
+        "train_mdape": float(train_metrics["mdape"]),
+        "val_mdape": float(val_metrics["mdape"]),
+        "test_mdape": None if test_metrics is None else float(test_metrics["mdape"]),
+        "train_acc_pct": float(train_metrics["acc_pct"]),
+        "val_acc_pct": float(val_metrics["acc_pct"]),
+        "test_acc_pct": None if test_metrics is None else float(test_metrics["acc_pct"]),
+        "train_mse_last": float(last_train["mse"]),
+        "val_mse_last": float(last_val["mse"]),
+        "test_mse_last": None if last_test is None else float(last_test["mse"]),
+        "train_rmse_last": float(last_train["rmse"]),
+        "val_rmse_last": float(last_val["rmse"]),
+        "test_rmse_last": None if last_test is None else float(last_test["rmse"]),
+        "train_mdape_last": float(last_train["mdape"]),
+        "val_mdape_last": float(last_val["mdape"]),
+        "test_mdape_last": None if last_test is None else float(last_test["mdape"]),
+        "train_acc_pct_last": float(last_train["acc_pct"]),
+        "val_acc_pct_last": float(last_val["acc_pct"]),
+        "test_acc_pct_last": None if last_test is None else float(last_test["acc_pct"]),
+        "test_price_rmse": None if test_price_rmse is None else float(test_price_rmse),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", default="ann_tensors.pt")
@@ -217,82 +331,47 @@ def main() -> None:
     val_loader = DataLoader(Subset(ds, val_idx), batch_size=args.batch_size, shuffle=False)
     test_loader = DataLoader(Subset(ds, test_idx), batch_size=args.batch_size, shuffle=False)
 
-    cat_sizes = [len(payload["cat_maps"][col]) for col in payload["cat_cols"]]
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    torch.manual_seed(args.seed)
-
-    model = HedonicLinear(n_num=payload["X_num"].shape[1], cat_sizes=cat_sizes).to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    loss_fn = nn.MSELoss()
-
-    best_val = float("inf")
-    best_epoch = 0
-    best_state: dict | None = None
-
-    for epoch in range(1, args.epochs + 1):
-        model.train()
-        for x_num, x_cat, y_log, _y_raw in train_loader:
-            opt.zero_grad(set_to_none=True)
-            pred = model(x_num.to(device), x_cat.to(device))
-            loss = loss_fn(pred, y_log.to(device))
-            loss.backward()
-            opt.step()
-
-        val_mse, val_rmse = _eval_log_mse_and_rmse(model, val_loader, device)
-        if val_mse < best_val:
-            best_val = val_mse
-            best_epoch = epoch
-            best_state = copy.deepcopy(model.state_dict())
-
-        # Light progress print (keep it readable).
-        print(f"epoch {epoch}/{args.epochs}  val_rmse(log1p_price)={val_rmse:.6f}")
-
-    # Metrics at the final epoch (can show overfitting vs best checkpoint).
-    train_eval_loader = DataLoader(Subset(ds, train_idx), batch_size=args.batch_size, shuffle=False)
-    last_train_metrics = _eval_metrics(model, train_eval_loader, device)
-    last_val_metrics = _eval_metrics(model, val_loader, device)
-    last_test_metrics = _eval_metrics(model, test_loader, device)
-
-    if best_state is not None:
-        model.load_state_dict(best_state)
-
-    train_metrics = _eval_metrics(model, train_eval_loader, device)
-    val_metrics = _eval_metrics(model, val_loader, device)
-    test_metrics = _eval_metrics(model, test_loader, device)
-
-    train_mse, train_rmse = float(train_metrics["mse"]), float(train_metrics["rmse"])
-    val_mse, val_rmse = float(val_metrics["mse"]), float(val_metrics["rmse"])
-    test_mse, test_rmse = float(test_metrics["mse"]), float(test_metrics["rmse"])
-    test_price_rmse = _eval_price_rmse(model, test_loader, device)
-
-    n_params = sum(p.numel() for p in model.parameters())
+    metrics = train_and_eval(
+        payload=payload,
+        train_idx=train_idx,
+        val_idx=val_idx,
+        test_idx=test_idx,
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+        seed=args.seed,
+        device=device,
+        compute_test=True,
+    )
     seconds = time.time() - start_time
 
     print("\nHedonic regression baseline summary:")
     print("  target: log1p(TransactionPrice)")
     extra = f" (train_max_samples={args.train_max_samples})" if args.train_max_samples is not None else ""
     print(f"  samples: n={n}  train={len(train_idx)} / {n_train_full}{extra}  val={len(val_idx)}  test={len(test_idx)}")
-    print(f"  device: {device.type}")
+    print(f"  device: {metrics.get('device')}")
     print(f"  split_strategy: {args.split_strategy}")
     print(f"  hyperparams: epochs={args.epochs} batch_size={args.batch_size} lr={args.lr} weight_decay={args.weight_decay}")
-    print(f"  n_params: {n_params}")
-    print(f"  best_val_epoch: {best_epoch}  best_val_mse: {best_val:.6f}")
-    print(f"  train_rmse(log): {train_rmse:.6f}  train_mse(log): {train_mse:.6f}")
-    print(f"  val_rmse(log):   {val_rmse:.6f}  val_mse(log):   {val_mse:.6f}")
-    print(f"  test_rmse(log):  {test_rmse:.6f}  test_mse(log):  {test_mse:.6f}")
-    print(f"  test_rmse($):    {test_price_rmse:,.2f}")
+    print(f"  n_params: {metrics['n_params']}")
+    print(f"  best_val_epoch: {metrics['best_val_epoch']}  best_val_mse: {metrics['best_val_mse']:.6f}")
+    print(f"  train_rmse(log): {metrics['train_rmse']:.6f}  train_mse(log): {metrics['train_mse']:.6f}")
+    print(f"  val_rmse(log):   {metrics['val_rmse']:.6f}  val_mse(log):   {metrics['val_mse']:.6f}")
+    print(f"  test_rmse(log):  {metrics['test_rmse']:.6f}  test_mse(log):  {metrics['test_mse']:.6f}")
+    if metrics.get("test_price_rmse") is not None:
+        print(f"  test_rmse($):    {float(metrics['test_price_rmse']):,.2f}")
     print(
         "  acc_pct (best checkpoint):"
-        f" train={train_metrics['acc_pct']:.2f}%"
-        f" val={val_metrics['acc_pct']:.2f}%"
-        f" test={test_metrics['acc_pct']:.2f}%"
+        f" train={metrics['train_acc_pct']:.2f}%"
+        f" val={metrics['val_acc_pct']:.2f}%"
+        f" test={metrics['test_acc_pct']:.2f}%"
     )
     print(
         "  acc_pct (last epoch):"
-        f" train={last_train_metrics['acc_pct']:.2f}%"
-        f" val={last_val_metrics['acc_pct']:.2f}%"
-        f" test={last_test_metrics['acc_pct']:.2f}%"
+        f" train={metrics['train_acc_pct_last']:.2f}%"
+        f" val={metrics['val_acc_pct_last']:.2f}%"
+        f" test={metrics['test_acc_pct_last']:.2f}%"
     )
 
     if args.out_csv:
@@ -321,34 +400,34 @@ def main() -> None:
             "lr": args.lr,
             "weight_decay": args.weight_decay,
             "model": "hedonic_linear_fixed_effects",
-            "n_params": int(n_params),
-            "best_val_epoch": int(best_epoch),
-            "best_val_mse": float(best_val),
-            "train_mse": float(train_mse),
-            "val_mse": float(val_mse),
-            "test_mse": float(test_mse),
-            "train_rmse": float(train_rmse),
-            "val_rmse": float(val_rmse),
-            "test_rmse": float(test_rmse),
-            "train_mdape": float(train_metrics["mdape"]),
-            "val_mdape": float(val_metrics["mdape"]),
-            "test_mdape": float(test_metrics["mdape"]),
-            "train_acc_pct": float(train_metrics["acc_pct"]),
-            "val_acc_pct": float(val_metrics["acc_pct"]),
-            "test_acc_pct": float(test_metrics["acc_pct"]),
-            "train_mse_last": float(last_train_metrics["mse"]),
-            "val_mse_last": float(last_val_metrics["mse"]),
-            "test_mse_last": float(last_test_metrics["mse"]),
-            "train_rmse_last": float(last_train_metrics["rmse"]),
-            "val_rmse_last": float(last_val_metrics["rmse"]),
-            "test_rmse_last": float(last_test_metrics["rmse"]),
-            "train_mdape_last": float(last_train_metrics["mdape"]),
-            "val_mdape_last": float(last_val_metrics["mdape"]),
-            "test_mdape_last": float(last_test_metrics["mdape"]),
-            "train_acc_pct_last": float(last_train_metrics["acc_pct"]),
-            "val_acc_pct_last": float(last_val_metrics["acc_pct"]),
-            "test_acc_pct_last": float(last_test_metrics["acc_pct"]),
-            "test_price_rmse": float(test_price_rmse),
+            "n_params": metrics["n_params"],
+            "best_val_epoch": metrics["best_val_epoch"],
+            "best_val_mse": metrics["best_val_mse"],
+            "train_mse": metrics["train_mse"],
+            "val_mse": metrics["val_mse"],
+            "test_mse": metrics["test_mse"],
+            "train_rmse": metrics["train_rmse"],
+            "val_rmse": metrics["val_rmse"],
+            "test_rmse": metrics["test_rmse"],
+            "train_mdape": metrics["train_mdape"],
+            "val_mdape": metrics["val_mdape"],
+            "test_mdape": metrics["test_mdape"],
+            "train_acc_pct": metrics["train_acc_pct"],
+            "val_acc_pct": metrics["val_acc_pct"],
+            "test_acc_pct": metrics["test_acc_pct"],
+            "train_mse_last": metrics["train_mse_last"],
+            "val_mse_last": metrics["val_mse_last"],
+            "test_mse_last": metrics["test_mse_last"],
+            "train_rmse_last": metrics["train_rmse_last"],
+            "val_rmse_last": metrics["val_rmse_last"],
+            "test_rmse_last": metrics["test_rmse_last"],
+            "train_mdape_last": metrics["train_mdape_last"],
+            "val_mdape_last": metrics["val_mdape_last"],
+            "test_mdape_last": metrics["test_mdape_last"],
+            "train_acc_pct_last": metrics["train_acc_pct_last"],
+            "val_acc_pct_last": metrics["val_acc_pct_last"],
+            "test_acc_pct_last": metrics["test_acc_pct_last"],
+            "test_price_rmse": metrics["test_price_rmse"],
             "seconds": round(seconds, 2),
         }
         append_row(out_path, row)

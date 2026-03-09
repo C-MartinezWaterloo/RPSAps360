@@ -16,6 +16,8 @@ For a detailed write-up of the pipeline and the results, see `REPORT.md`.
 - `sweep_deepfm.py` – runs a randomized DeepFM sweep
 - `train_tabnet.py` – trains a TabNet model (sequential feature selection)
 - `sweep_tabnet.py` – runs a randomized TabNet sweep
+- `eval_suite.py` – reruns best configs across multiple seeds/splits (random + time split)
+- `feature_importance.py` – permutation feature importance (ANN vs hedonic)
 - `export_results.py` – merges all run logs into **one** file: `results_all.csv`
 - `results_all.csv` – **canonical** results file for GitHub
 - `models/` – short docs per model (Hedonic, ANN, FM, DeepFM, TabNet, planned XGBoost)
