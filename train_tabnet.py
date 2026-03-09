@@ -202,6 +202,11 @@ class TabNetRegressor(nn.Module):
 
         self.emb = CatEmbedder(cat_sizes=cat_sizes, embed_dim_cap=embed_dim_cap, dropout=cat_dropout)
         self.n_features = int(n_num + self.emb.out_dim)
+        self.n_groups = int(n_num + len(cat_sizes))
+        self.register_buffer(
+            "group_sizes",
+            torch.tensor(([1] * int(n_num)) + list(self.emb.dims), dtype=torch.long),
+        )
 
         self.input_bn = nn.BatchNorm1d(self.n_features)
 
@@ -214,13 +219,16 @@ class TabNetRegressor(nn.Module):
         self.ft_shared = FeatureTransformer(
             in_dim=self.n_features, out_dim=out_dim, n_shared=n_shared, n_independent=0, dropout=dropout
         )
+        self.ft_initial = FeatureTransformer(
+            in_dim=out_dim, out_dim=out_dim, n_shared=0, n_independent=n_independent, dropout=dropout
+        )
         self.ft_steps = nn.ModuleList(
             [
                 FeatureTransformer(in_dim=out_dim, out_dim=out_dim, n_shared=0, n_independent=n_independent, dropout=dropout)
                 for _ in range(self.n_steps)
             ]
         )
-        self.att_steps = nn.ModuleList([AttentiveTransformer(in_dim=self.n_a, out_dim=self.n_features) for _ in range(self.n_steps)])
+        self.att_steps = nn.ModuleList([AttentiveTransformer(in_dim=self.n_a, out_dim=self.n_groups) for _ in range(self.n_steps)])
 
         self.fc_out = nn.Linear(self.n_d, 1)
 
@@ -228,24 +236,32 @@ class TabNetRegressor(nn.Module):
         x = torch.cat([x_num, self.emb(x_cat)], dim=1)
         x = self.input_bn(x)
 
-        prior = torch.ones_like(x)
+        # Group-level prior/masks:
+        #   - numeric: 1 group per numeric feature (size=1)
+        #   - categorical: 1 group per categorical column (size=embed_dim)
+        # This avoids masking individual embedding dimensions, which is both
+        # harder to interpret and empirically unstable.
+        prior = torch.ones((x.shape[0], self.n_groups), device=x.device, dtype=x.dtype)
         sparse_loss = 0.0
 
-        # First transform (shared), then iterative steps.
-        out = self.ft_shared(x)
-        d, a = out.split([self.n_d, self.n_a], dim=1)
-        decision_sum = torch.relu(d)
+        # Initial splitter creates the first attention embedding `a` (TabNet-style).
+        out0 = self.ft_shared(x)
+        out0 = self.ft_initial(out0)
+        _, a = out0.split([self.n_d, self.n_a], dim=1)
+        decision_sum = torch.zeros((x.shape[0], self.n_d), device=x.device, dtype=x.dtype)
 
         eps = 1e-8
         for step in range(self.n_steps):
-            mask = self.att_steps[step](a, prior)
-            prior = prior * (self.gamma - mask)
+            mask_group = self.att_steps[step](a, prior)
+            prior = prior * (self.gamma - mask_group)
 
             if return_sparse_loss:
-                entropy = (-mask * torch.log(mask.clamp_min(eps))).sum(dim=1).mean()
+                entropy = (-mask_group * torch.log(mask_group.clamp_min(eps))).sum(dim=1).mean()
                 sparse_loss = sparse_loss + entropy
 
+            mask = mask_group.repeat_interleave(self.group_sizes, dim=1)
             x_masked = mask * x
+
             out = self.ft_shared(x_masked)
             out = self.ft_steps[step](out)
             d, a = out.split([self.n_d, self.n_a], dim=1)
@@ -334,6 +350,7 @@ def train_and_eval(
     dropout: float,
     lambda_sparse: float,
     seed: int,
+    val_max_samples: int | None = None,
     device: torch.device | None = None,
     compute_test: bool = True,
 ) -> dict:
@@ -346,6 +363,10 @@ def train_and_eval(
 
     train_loader = DataLoader(Subset(ds, train_idx), batch_size=batch_size, shuffle=True, generator=g)
     val_loader = DataLoader(Subset(ds, val_idx), batch_size=batch_size, shuffle=False)
+    val_idx_select = val_idx
+    if val_max_samples is not None and val_max_samples > 0 and val_max_samples < len(val_idx):
+        val_idx_select = val_idx[:val_max_samples]
+    val_loader_select = DataLoader(Subset(ds, val_idx_select), batch_size=batch_size, shuffle=False)
     test_loader = None
     if compute_test:
         test_loader = DataLoader(Subset(ds, test_idx), batch_size=batch_size, shuffle=False)
@@ -377,7 +398,7 @@ def train_and_eval(
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     loss_fn = nn.MSELoss()
 
-    best_val = float("inf")
+    best_val_select = float("inf")
     best_epoch = 0
     best_state: dict | None = None
 
@@ -391,9 +412,9 @@ def train_and_eval(
             loss.backward()
             opt.step()
 
-        val_mse = _eval_mse(model, val_loader, device)
-        if val_mse < best_val:
-            best_val = val_mse
+        val_mse_select = _eval_mse(model, val_loader_select, device)
+        if val_mse_select < best_val_select:
+            best_val_select = val_mse_select
             best_epoch = epoch
             best_state = copy.deepcopy(model.state_dict())
 
@@ -419,7 +440,9 @@ def train_and_eval(
         "device": device.type,
         "n_params": int(n_params),
         "best_val_epoch": int(best_epoch),
-        "best_val_mse": float(best_val),
+        # Always report best_val_mse on the full validation set (even if epoch
+        # selection used a smaller subset for speed).
+        "best_val_mse": float(val_metrics["mse"]),
         "train_mse": float(train_metrics["mse"]),
         "val_mse": float(val_metrics["mse"]),
         "test_mse": None if test_metrics is None else float(test_metrics["mse"]),

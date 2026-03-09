@@ -1,4 +1,4 @@
-# House Price Modeling Report (Hedonic + ANN + FM)
+# House Price Modeling Report (Hedonic + ANN + FM + DeepFM + TabNet)
 
 This document summarizes what was built in this repo, what data we trained on, what experiments were run, and what the results mean.
 
@@ -105,9 +105,11 @@ These are the best runs we logged with `test_acc_pct` available (note: the ANN/F
 | Model | Feature set | Train rows | Test accuracy % | Test RMSE(log) | Notes |
 |---|---|---:|---:|---:|---|
 | Hedonic (linear fixed effects) | full | 418,549 | 87.74 | 0.2428 | Full-train baseline |
+| ANN (full train, best single run) | full | 418,549 | 92.62 | 0.1433 | `512→256→128→64`, `dropout=0.1` |
 | ANN sweep (deep_test, 100 runs) | full | 50,000 | 88.02 | 0.2564 | Best config: `huge3` (2048→1024→512) |
 | FM sweep (100 runs) | full | 50,000 | 88.33 | 0.4056 | Higher median accuracy, but much worse tail error (RMSE) |
 | DeepFM sweep (200 runs) | full | 50,000 | 89.70 | 0.2851 | Best config: `huge` + `k=16` + deep MLP (2048→1024→512) |
+| TabNet sweep (100 runs) | full | 50,000 | 78.46 | 0.3948 | Best config: `d=16,a=16,steps=3,gamma=1.3` |
 
 Interpretation:
 - **Accuracy% (MdAPE)** is robust to outliers; **RMSE(log)** is sensitive to the tail.
@@ -116,7 +118,7 @@ Interpretation:
 ### B) Best overall RMSE (full training)
 
 The best run we logged on `feature_set=full` by **test RMSE(log)** (lower is better):
-- ANN (full train): **test RMSE(log1p) ≈ 0.1433**
+- ANN (full train): **test RMSE(log1p) ≈ 0.1433**, **test accuracy% ≈ 92.62%** (MdAPE ≈ 7.38%)
 
 This is substantially better than the FM/ANN 50k sweeps above; those sweeps cap training rows for speed.
 
@@ -124,6 +126,7 @@ This is substantially better than the FM/ANN 50k sweeps above; those sweeps cap 
 
 **Best overall (ANN, full features):**
 - Test RMSE(log1p): **0.1433** (≈15.4% multiplicative error scale)
+- Test accuracy% (MdAPE): **92.62%** (MdAPE ≈ 7.38%)
 - Config (from `results_all.csv`):
   - `hidden_dims=512,256,128,64`
   - `batch_size=512`

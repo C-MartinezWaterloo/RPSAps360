@@ -60,6 +60,12 @@ def main() -> None:
     parser.add_argument("--train-frac", type=float, default=0.70)
     parser.add_argument("--val-frac", type=float, default=0.15)
     parser.add_argument("--test-frac", type=float, default=0.15)
+    parser.add_argument(
+        "--val-max-samples",
+        type=int,
+        default=20_000,
+        help="Cap validation rows used for best-epoch selection (full val/test metrics still computed at the end). Use 0 for full val.",
+    )
 
     parser.add_argument(
         "--train-max-samples",
@@ -78,6 +84,8 @@ def main() -> None:
         raise SystemExit("--n-runs must be positive.")
     if args.train_max_samples < 0:
         raise SystemExit("--train-max-samples must be >= 0.")
+    if args.val_max_samples < 0:
+        raise SystemExit("--val-max-samples must be >= 0.")
     if args.candidate_offset < 0:
         raise SystemExit("--candidate-offset must be >= 0.")
 
@@ -146,6 +154,7 @@ def main() -> None:
     # Search space (kept moderate for CPU).
     embed_dim_caps = [32, 64]
     cat_dropouts = [0.0, 0.05]
+    # Starter sweep space (kept moderate for CPU so we can run lots of configs).
     n_ds = [16, 32, 64]
     n_as = [16, 32, 64]
     n_steps = [3, 4, 5]
@@ -154,9 +163,9 @@ def main() -> None:
     n_independent = [1, 2]
     dropouts = [0.0, 0.05, 0.1]
     lambda_sparses = [0.0, 1e-6, 1e-5, 1e-4]
-    epochs = [20, 30, 40]
-    batch_sizes = [4096, 8192]
-    lrs = [0.001, 0.002, 0.003, 0.005]
+    epochs = [15, 20]
+    batch_sizes = [2048, 4096]
+    lrs = [0.0005, 0.001, 0.002, 0.003, 0.005]
     weight_decays = [0.0, 1e-6, 1e-5, 1e-4, 5e-4, 1e-3]
 
     rng = np.random.default_rng(args.config_seed)
@@ -275,6 +284,7 @@ def main() -> None:
     print(f"  data: {args.data}  feature_set={payload.get('feature_set','')}")
     print(f"  split: {args.split_strategy} seed={args.split_seed}  train/val/test={args.train_frac}/{args.val_frac}/{args.test_frac}")
     print(f"  train_max_samples: {args.train_max_samples} (train_used={n_train_used}/{n_train_full})  val={n_val} test={n_test} total={n_total}")
+    print(f"  val_max_samples (for epoch selection): {args.val_max_samples if args.val_max_samples else 'full'}")
     print(f"  device: {device.type}")
     print(f"  out_csv: {out_path}")
     print(f"  configs: target_runs={args.n_runs} generated={len(generated)} offset={args.candidate_offset} resume={args.resume}")
@@ -303,6 +313,7 @@ def main() -> None:
             dropout=cfg["dropout"],
             lambda_sparse=cfg["lambda_sparse"],
             seed=args.split_seed,
+            val_max_samples=None if args.val_max_samples == 0 else int(args.val_max_samples),
             device=device,
             compute_test=True,
         )
@@ -412,4 +423,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
