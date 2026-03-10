@@ -28,5 +28,11 @@ tabnet_runs*.csv
 tabnet_sweep*.csv
 eval_runs*.csv
 feature_importance*.csv
+xgb_runs*.csv
+lgbm_runs*.csv
 ann_results.xlsx
 ann_all_results.xlsx
+
+# Generated report visuals
+plots/
+report_graphs*.html

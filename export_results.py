@@ -73,6 +73,10 @@ def _ensure_defaults(row: dict) -> None:
             row["stage"] = "tabnet"
         elif source in {"eval_suite"}:
             row["stage"] = "robustness"
+        elif source in {"xgboost"}:
+            row["stage"] = "xgboost"
+        elif source in {"lightgbm"}:
+            row["stage"] = "lightgbm"
 
     # Model defaults (so you can quickly group by family).
     if "model" not in row or not str(row.get("model", "")).strip():
@@ -89,6 +93,10 @@ def _ensure_defaults(row: dict) -> None:
         elif source in {"eval_suite"}:
             # Model should already be present, but keep a safe default.
             row["model"] = str(row.get("model", "")).strip() or "unknown"
+        elif source in {"xgboost"}:
+            row["model"] = "xgboost"
+        elif source in {"lightgbm"}:
+            row["model"] = "lightgbm"
 
     # Backfill feature_set when missing.
     inferred = _infer_feature_set(row)
@@ -450,6 +458,21 @@ def main() -> None:
     for path in sorted(root.glob("eval_runs*.csv")):
         for row in _load_csv_rows(path):
             row.setdefault("source", "eval_suite")
+            row.setdefault("run_group", path.stem)
+            _ensure_defaults(row)
+            rows_all.append(row)
+
+    # 11) External boosting baselines (run in a separate environment).
+    for path in sorted(root.glob("xgb_runs*.csv")):
+        for row in _load_csv_rows(path):
+            row.setdefault("source", "xgboost")
+            row.setdefault("run_group", path.stem)
+            _ensure_defaults(row)
+            rows_all.append(row)
+
+    for path in sorted(root.glob("lgbm_runs*.csv")):
+        for row in _load_csv_rows(path):
+            row.setdefault("source", "lightgbm")
             row.setdefault("run_group", path.stem)
             _ensure_defaults(row)
             rows_all.append(row)
