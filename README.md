@@ -3,6 +3,7 @@
 This repo prepares a housing transaction dataset into PyTorch tensors, trains multiple tabular models, and logs results to a single CSV (`results_all.csv`).
 
 For a detailed write-up of the pipeline and the results, see `REPORT.md`.
+For a PDF-style write-up with embedded graphs, see `report.tex`.
 
 ## Files
 - `prepare_ann_tensors.py` – reads the raw CSV and writes `.pt` tensors
@@ -21,6 +22,7 @@ For a detailed write-up of the pipeline and the results, see `REPORT.md`.
 - `make_report_graphs.py` – generates an offline HTML dashboard of plots from `results_all.csv`
 - `export_results.py` – merges all run logs into **one** file: `results_all.csv`
 - `results_all.csv` – **canonical** results file for GitHub
+- `report.tex` – LaTeX report (pgfplots graphs + tables)
 - `models/` – short docs per model (Hedonic, ANN, FM, DeepFM, TabNet, planned XGBoost)
 
 ## Quick start

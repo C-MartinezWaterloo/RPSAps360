@@ -119,7 +119,11 @@ def _row_signature(row: dict) -> tuple[tuple[str, str], ...]:
     We ignore a small set of bookkeeping fields so the same run coming from
     different source files collapses to one row.
     """
-    ignore_keys = {"run_group"}
+    # `run_group` and `run` are bookkeeping fields that can change depending on which
+    # intermediate CSV produced the row. `seconds` is also noisy across re-runs.
+    # We ignore them so repeated ingests collapse to one row when all meaningful
+    # fields match.
+    ignore_keys = {"run_group", "run", "seconds"}
     items: list[tuple[str, str]] = []
     for k, v in row.items():
         if k in ignore_keys:

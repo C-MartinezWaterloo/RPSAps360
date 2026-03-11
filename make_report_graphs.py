@@ -24,8 +24,11 @@ import csv
 import datetime as dt
 import math
 import random
+import re
 from pathlib import Path
 from statistics import mean, stdev
+from itertools import count
+import json
 
 import numpy as np
 import plotly.graph_objects as go
@@ -114,26 +117,54 @@ def _hover(row: dict) -> str:
     return "<br>".join(parts)
 
 
-def _add_fig_section(sections: list[str], title: str, fig: go.Figure) -> None:
+_FIG_COUNTER = count(1)
+
+
+def _slugify(s: str, *, max_len: int = 70) -> str:
+    s = s.lower()
+    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+    s = re.sub(r"_+", "_", s)
+    if not s:
+        s = "figure"
+    if len(s) > max_len:
+        s = s[:max_len].rstrip("_")
+    return s
+
+
+def _add_fig_section(sections: list[str], title: str, fig: go.Figure, *, registry: list[dict]) -> None:
+    idx = next(_FIG_COUNTER)
+    slug = _slugify(title)
+    fig_id = f"fig_{idx:02d}_{slug}"
+    filename = fig_id
+    registry.append({"id": fig_id, "filename": filename, "title": title})
+
     div = pio.to_html(
         fig,
         include_plotlyjs=False,
         full_html=False,
+        div_id=fig_id,
         config={
             "displaylogo": False,
             "responsive": True,
         },
     )
-    sections.append(f"<section class='card'><h2>{title}</h2>{div}</section>")
+    actions = (
+        "<div class='actions'>"
+        f"<button class='btn' onclick=\"downloadFig('{fig_id}','png','{filename}')\">Download PNG</button>"
+        f"<button class='btn secondary' onclick=\"downloadFig('{fig_id}','svg','{filename}')\">Download SVG</button>"
+        "</div>"
+    )
+    sections.append(f"<section class='card'><div class='card-head'><h2>{title}</h2>{actions}</div>{div}</section>")
 
 
 def _make_best_bar(rows: list[dict], *, metric: str, mode: str, title: str) -> go.Figure:
     families = [
         ("ANN (full train)", lambda r: r.get("source") == "train_ann" and _is_full_random(r)),
         ("Hedonic (full train)", lambda r: r.get("source") == "hedonic" and _is_full_random(r)),
+        ("DeepFM (full train)", lambda r: r.get("source") == "train_deepfm" and _is_full_random(r)),
         ("DeepFM sweep (50k)", lambda r: r.get("source") == "sweep_deepfm" and _is_full_random(r)),
-        ("ANN sweep (deep_test, 50k)", lambda r: r.get("source") == "sweep_deep_test" and _is_full_random(r)),
-        ("ANN sweep (clean, 50k)", lambda r: r.get("source") == "sweep_clean" and _is_full_random(r)),
+        ("ANN sweep (deep_test)", lambda r: r.get("source") == "sweep_deep_test" and _is_full_random(r)),
+        ("ANN sweep (clean)", lambda r: r.get("source") == "sweep_clean" and _is_full_random(r)),
         ("FM sweep (50k)", lambda r: r.get("source") == "sweep_fm" and _is_full_random(r)),
         ("TabNet sweep (50k)", lambda r: r.get("source") == "sweep_tabnet" and _is_full_random(r)),
     ]
@@ -571,6 +602,7 @@ def main() -> None:
         raise SystemExit(f"No rows found in {results_path}")
 
     sections: list[str] = []
+    fig_registry: list[dict] = []
     now = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
     header = f"""
 <!doctype html>
@@ -585,17 +617,64 @@ def main() -> None:
     .meta {{ color: #555; margin-bottom: 18px; }}
     .grid {{ display: grid; grid-template-columns: 1fr; gap: 16px; }}
     .card {{ background: white; border: 1px solid #eee; border-radius: 12px; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }}
-    .card h2 {{ margin: 0 0 10px 0; font-size: 16px; }}
+    .card h2 {{ margin: 0; font-size: 16px; }}
+    .card-head {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }}
+    .actions {{ display: flex; gap: 8px; flex-wrap: wrap; }}
+    .btn {{ border: 1px solid #ddd; background: #111; color: #fff; border-radius: 10px; padding: 8px 10px; font-size: 12px; cursor: pointer; }}
+    .btn.secondary {{ background: #fff; color: #111; }}
+    .btn:hover {{ filter: brightness(0.95); }}
     .note {{ color: #666; font-size: 13px; line-height: 1.4; }}
     code {{ background: #f2f2f2; padding: 1px 5px; border-radius: 6px; }}
   </style>
   <script type="text/javascript">{get_plotlyjs()}</script>
+  <script type="text/javascript">
+    async function downloadFig(id, format, filename) {{
+      try {{
+        const gd = document.getElementById(id);
+        if (!gd) {{
+          alert("Chart not found: " + id);
+          return;
+        }}
+        await Plotly.downloadImage(gd, {{
+          format: format,
+          filename: filename,
+          scale: 2
+        }});
+      }} catch (e) {{
+        console.error(e);
+        alert("Download failed. See console for details.");
+      }}
+    }}
+
+    async function downloadAll(format) {{
+      const figs = (window.__FIG_REGISTRY || []);
+      if (!figs.length) {{
+        alert("No charts found to download.");
+        return;
+      }}
+      // Browsers may block multiple downloads; you may need to allow them.
+      for (const fig of figs) {{
+        await downloadFig(fig.id, format, fig.filename);
+        await new Promise(r => setTimeout(r, 150));
+      }}
+    }}
+  </script>
 </head>
 <body>
   <h1>RPSAps360 — Report Graphs</h1>
-  <div class="meta">Generated {now} from <code>{results_path}</code>. Use each chart’s modebar to download PNG.</div>
+  <div class="meta">Generated {now} from <code>{results_path}</code>. Use the download buttons (or each chart’s modebar) to save PNG/SVG.</div>
   <div class="note card">
-    These plots focus on <b>feature_set=full</b>. Sweeps often use <b>train_max_samples=50,000</b> for speed; the best ANN result is a full-train run.
+    These plots focus on <b>feature_set=full</b>. Sweeps often use <b>train_max_samples=50,000</b> for speed; the best ANN/DeepFM results include full-train runs.
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <h2>Downloads</h2>
+      <div class="actions">
+        <button class="btn" onclick="downloadAll('png')">Download all PNG</button>
+        <button class="btn secondary" onclick="downloadAll('svg')">Download all SVG</button>
+      </div>
+    </div>
+    <div class="note">Tip: Each chart also has its own download buttons above it. Your browser may ask you to allow multiple downloads.</div>
   </div>
   <div class="grid">
 """
@@ -605,17 +684,19 @@ def main() -> None:
         sections,
         "Best per model family — Test RMSE (full features, random split)",
         _make_best_bar(rows, metric="test_rmse", mode="min", title="Best run per family by test_rmse"),
+        registry=fig_registry,
     )
     _add_fig_section(
         sections,
         "Best per model family — Test accuracy% (full features, random split)",
         _make_best_bar(rows, metric="test_acc_pct", mode="max", title="Best run per family by test_acc_pct"),
+        registry=fig_registry,
     )
 
     # Sweeps.
-    _add_fig_section(sections, "Sweep trade-off: RMSE vs accuracy% (each point = one run)", _make_sweep_scatter(rows, title="Sweeps: test_rmse vs test_acc_pct"))
-    _add_fig_section(sections, "Sweep correlation: validation accuracy% vs test accuracy%", _make_val_vs_test(rows, title="Sweeps: val_acc_pct vs test_acc_pct"))
-    _add_fig_section(sections, "Sweep distributions: test RMSE", _make_rmse_hist(rows, title="Sweeps: distribution of test_rmse"))
+    _add_fig_section(sections, "Sweep trade-off: RMSE vs accuracy% (each point = one run)", _make_sweep_scatter(rows, title="Sweeps: test_rmse vs test_acc_pct"), registry=fig_registry)
+    _add_fig_section(sections, "Sweep correlation: validation accuracy% vs test accuracy%", _make_val_vs_test(rows, title="Sweeps: val_acc_pct vs test_acc_pct"), registry=fig_registry)
+    _add_fig_section(sections, "Sweep distributions: test RMSE", _make_rmse_hist(rows, title="Sweeps: distribution of test_rmse"), registry=fig_registry)
     _add_fig_section(
         sections,
         "Overfitting signal: validation accuracy gap (best checkpoint − last epoch)",
@@ -626,6 +707,7 @@ def main() -> None:
             metric_last="val_acc_pct_last",
             y_title="val_acc_pct - val_acc_pct_last",
         ),
+        registry=fig_registry,
     )
     _add_fig_section(
         sections,
@@ -637,6 +719,7 @@ def main() -> None:
             metric_last="val_rmse",
             y_title="val_rmse_last - val_rmse",
         ),
+        registry=fig_registry,
     )
 
     # Robustness eval suite.
@@ -644,34 +727,41 @@ def main() -> None:
         sections,
         "Robustness (random split): test RMSE across split/model seeds",
         _make_eval_points(rows, split_strategy="random", metric="test_rmse", title="eval_suite: test_rmse (random split)"),
+        registry=fig_registry,
     )
     _add_fig_section(
         sections,
         "Robustness (random split): test accuracy% across split/model seeds",
         _make_eval_points(rows, split_strategy="random", metric="test_acc_pct", title="eval_suite: test_acc_pct (random split)"),
+        registry=fig_registry,
     )
     _add_fig_section(
         sections,
         "Robustness (time split): test RMSE across model seeds",
         _make_eval_points(rows, split_strategy="time", metric="test_rmse", title="eval_suite: test_rmse (time split)"),
+        registry=fig_registry,
     )
     _add_fig_section(
         sections,
         "Robustness summary: mean ± std (random vs time)",
         _make_eval_mean_bars(rows, metric="test_rmse", title="eval_suite: mean test_rmse by split strategy"),
+        registry=fig_registry,
     )
 
     # Feature importance (if present).
     fi_path = Path(args.feature_importance)
     for title, fig in _make_feature_importance(fi_path):
-        _add_fig_section(sections, title, fig)
+        _add_fig_section(sections, title, fig, registry=fig_registry)
 
     # Data context (optional, if tensors exist).
     for title, fig in _make_data_context(Path(args.data_pt), sample_n=args.sample_n, seed=args.seed):
-        _add_fig_section(sections, title, fig)
+        _add_fig_section(sections, title, fig, registry=fig_registry)
 
-    footer = """
+    footer = f"""
   </div>
+  <script type="text/javascript">
+    window.__FIG_REGISTRY = {json.dumps(fig_registry, ensure_ascii=False)};
+  </script>
 </body>
 </html>
 """
@@ -684,4 +774,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

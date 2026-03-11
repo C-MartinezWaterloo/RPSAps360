@@ -36,3 +36,15 @@ ann_all_results.xlsx
 # Generated report visuals
 plots/
 report_graphs*.html
+
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.toc
+report.pdf

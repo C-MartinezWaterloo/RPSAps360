@@ -100,12 +100,13 @@ All results live in `results_all.csv` (openable in Excel).
 
 ### A) Full-feature comparison (MdAPE-based accuracy %)
 
-These are the best runs we logged with `test_acc_pct` available (note: the ANN/FM/DeepFM sweeps cap training rows to 50,000 for speed):
+These are the best runs we logged with `test_acc_pct` available (note: many sweeps cap training rows to 50,000 for speed; full-train runs are explicitly labeled):
 
 | Model | Feature set | Train rows | Test accuracy % | Test RMSE(log) | Notes |
 |---|---|---:|---:|---:|---|
 | Hedonic (linear fixed effects) | full | 418,549 | 87.74 | 0.2428 | Full-train baseline |
 | ANN (full train, best single run) | full | 418,549 | 92.62 | 0.1433 | `512→256→128→64`, `dropout=0.1` |
+| DeepFM (full train, single run) | full | 418,549 | 91.00 | 0.1791 | `k=16`, `2048→1024→512`, `dropout=0.05` |
 | ANN sweep (deep_test, 100 runs) | full | 50,000 | 88.02 | 0.2564 | Best config: `huge3` (2048→1024→512) |
 | FM sweep (100 runs) | full | 50,000 | 88.33 | 0.4056 | Higher median accuracy, but much worse tail error (RMSE) |
 | DeepFM sweep (200 runs) | full | 50,000 | 89.70 | 0.2851 | Best config: `huge` + `k=16` + deep MLP (2048→1024→512) |
@@ -114,6 +115,9 @@ These are the best runs we logged with `test_acc_pct` available (note: the ANN/F
 Interpretation:
 - **Accuracy% (MdAPE)** is robust to outliers; **RMSE(log)** is sensitive to the tail.
 - FM/DeepFM can look strong on MdAPE while still having much worse RMSE if a small fraction of homes are predicted badly.
+
+Additional note (full-train DeepFM stability):
+- Across 3 random-split seeds (0/1/42), the DeepFM full-train config averaged **test acc% ≈ 91.22 ± 0.51** (see `train_deepfm` rows in `results_all.csv`).
 
 ### B) Best overall RMSE (full training)
 
@@ -172,13 +176,16 @@ From `sweep_clean` (test-clean):
 
 To verify the ANN’s advantage is not due to a “lucky” random partition, we reran the best full-feature ANN and the hedonic baseline across multiple **random split seeds** and **model seeds**, and also on a **time-based split** (train earlier years → test later years). These runs are logged under `source=eval_suite` in `results_all.csv`.
 
-**Random split (3 split seeds × 2 model seeds = 6 runs):**
-- ANN best config (`hidden_dims=512,256,128,64`): **test RMSE ≈ 0.1409 ± 0.0036**, **test acc% ≈ 92.77 ± 0.28**
-- Hedonic baseline: **test RMSE ≈ 0.2453 ± 0.0037**, **test acc% ≈ 87.75 ± 0.17**
+**Random split (21 runs; multiple split seeds + model seeds):**
+- ANN best config (`hidden_dims=512,256,128,64`): **test RMSE ≈ 0.1420 ± 0.0036**, **test acc% ≈ 92.64 ± 0.31**
+- Hedonic baseline: **test RMSE ≈ 0.2446 ± 0.0030**, **test acc% ≈ 87.76 ± 0.10**
 
-**Time split (2 model seeds, split_seed=42):**
-- ANN best config: **test RMSE ≈ 0.3415 ± 0.0136**, **test acc% ≈ 82.37 ± 0.75**
-- Hedonic baseline: **test RMSE ≈ 0.5957 ± 0.0210**, **test acc% ≈ 69.22 ± 1.43**
+**Time split (9 runs; split_seed ∈ {42,7}):**
+- ANN best config: **test RMSE ≈ 0.3146 ± 0.0365**, **test acc% ≈ 82.78 ± 2.35**
+- Hedonic baseline: **test RMSE ≈ 0.5947 ± 0.0162**, **test acc% ≈ 69.35 ± 1.09**
+
+Notes:
+- The **time split** is much more sensitive to model initialization than the random split. For the ANN across these seeds, **best** was **RMSE=0.2609 / acc=85.78%** (seed=42) and **worst** was **RMSE=0.3727 / acc=77.27%** (seed=2).
 
 Interpretation:
 - The ANN remains clearly better than hedonic regression across multiple random partitions.
@@ -232,9 +239,17 @@ To support a forecast-style evaluation, we added:
 - `prepare_ann_tensors.py --feature-set basic_time` (minimal features + `TransactionYear`/`Quarter`)
 - `train_ann.py --split-strategy time` / `hedonic_baseline.py --split-strategy time` (train on earlier transactions, test on later ones)
 
-**What happened to accuracy with a time split (seed=42, 70/15/15 by time-order):**
-- ANN (full features): **test RMSE(log1p) = 0.2609**
-- Hedonic baseline (full features): **test RMSE(log1p) = 0.5815**
+**What happened to accuracy with a time split (70/15/15 by time-order):**
+- ANN (full features; `eval_suite`, 9 runs across multiple model seeds and `split_seed ∈ {42,7}`):
+  - **test RMSE(log1p) ≈ 0.3146 ± 0.0365**
+  - **test accuracy% ≈ 82.78 ± 2.35**
+  - Best run in these checks: **RMSE=0.2609 / acc=85.78%** (seed=42, split_seed=42)
+- Hedonic baseline (full features; `eval_suite`, 9 runs):
+  - **test RMSE(log1p) ≈ 0.5947 ± 0.0162**
+  - **test accuracy% ≈ 69.35 ± 1.09**
+- DeepFM (full features; full-train, 3 seeds 0/1/42):
+  - **test RMSE(log1p) ≈ 0.3533 ± 0.0107**
+  - **test accuracy% ≈ 75.74 ± 1.51**
 - ANN (basic_time = minimal + year/quarter): **test RMSE(log1p) = 0.4079**
 - Hedonic baseline (basic_time): **test RMSE(log1p) = 1.4119**
 
@@ -244,8 +259,9 @@ Interpretation:
 
 ## 10) External baselines (XGBoost / LightGBM)
 
-XGBoost/LightGBM are commonly very strong on tabular data and are worth comparing against the neural nets here. In this repo we keep them as a planned extension because the current runtime environment is intentionally minimal and does not include compiled boosting dependencies.
+XGBoost/LightGBM are commonly very strong on tabular data and are worth comparing against the neural nets here. The default environment for this repo is intentionally minimal and does not include compiled boosting dependencies, so these are meant to be run in a separate Python environment.
 
 When you’re ready to add them:
-- Train/sweep XGBoost or LightGBM using the same split logic (random + time) and the same metric columns (`*_rmse`, `*_acc_pct`, and `*_last` metrics).
-- Export their runs to a CSV and ingest into `results_all.csv` via `export_results.py`.
+- Use `models/06_xgboost/train_boosting.py` to train either XGBoost or LightGBM on the same tensors + split logic.
+- It writes `xgb_runs.csv` / `lgbm_runs.csv` (gitignored), which are merged into `results_all.csv` by running `python export_results.py`.
+- To avoid huge one-hot matrices, the script uses compact categorical encodings (frequency + K-fold target mean encoding computed on the training split only).
