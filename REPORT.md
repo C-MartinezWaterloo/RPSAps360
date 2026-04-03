@@ -53,6 +53,97 @@ All experiments used the same dataset size:
 
 The split is deterministic via `train_ann._make_splits()`.
 
+## 2.1) Data processing (cleaning + formatting, reproducible)
+
+All model training starts from the local cleaned CSV (`cleaned_transaction_gtha-2.csv`) and uses `prepare_ann_tensors.py` to produce a single tensor file (e.g., `ann_tensors_full.pt`). The data processing is fully reproducible from code:
+
+1) **Filter unusable targets**
+   - Drop rows where `TransactionPrice` is missing, non-numeric, or non-positive.
+
+2) **Parse + normalize missing values**
+   - Treat empty strings and common missing tokens (`NA`, `NULL`, `NaN`, `-999`) as missing.
+
+3) **Numeric feature cleaning**
+   - Compute **streaming mean/std** for each numeric column (Welford’s algorithm, one pass over the CSV).
+   - Standardize each numeric column to `(x - mean) / std`.
+   - Impute missing numeric values with the column mean (so the standardized value becomes `0`).
+
+4) **Categorical feature cleaning**
+   - Convert each categorical value to a normalized string.
+   - Map missing categoricals to a dedicated token: `__NA__`.
+   - Build a `{category_string -> integer_index}` vocabulary per column, used by embedding-based models.
+   - Optionally cap rare categories with `--max-categories` and map the rest to `__OTHER__`.
+
+5) **Target formatting**
+   - Store both:
+     - `y` (raw `TransactionPrice`)
+     - `y_log1p = log1p(TransactionPrice)` (training target used for all models)
+
+### Quick statistics from the full tensor file (`feature_set=full`)
+
+- **Price distribution** (raw `TransactionPrice`):
+  - min: **$10,000**
+  - p10: **$301,000**
+  - median: **$570,000**
+  - p90: **$1,181,000**
+  - max: **$22,000,000**
+
+- **TransactionYear coverage**:
+  - recovered range (rounded): **1910 → 2201** (rare outliers)
+  - **99.97%** of rows fall in **2000–2025**
+
+- **Categorical cardinalities** (unique tokens incl. `__NA__`, after cleaning):
+  - `BuildingType`: 995
+  - `PropertyStyle`: 3,356
+  - `Condition`: 8
+  - `FSA`: 234
+  - `gcode_City`: 325
+  - `Basement`: 6
+  - `Parking_Type`: 8
+  - `Ownership`: 5
+  - `PropertyUse`: 2,284
+  - `BRPS_Style`: 9
+  - `gcode_MatchStatus`: 5
+
+### Example cleaned training sample (one row)
+
+Below is one representative example (no address-level identifiers), shown as the cleaned feature values used by the models:
+
+```text
+TransactionPrice: 600000
+TransactionYear: 2009
+Quarter: 2
+
+LivingArea: 2160
+LotSize: 35719
+YearBuilt: 1989
+Bath_Full: 2
+Bath_Half: 1
+Bed_Full: 3
+
+BuildingType: DETACHED
+PropertyStyle: 1 STOREY
+Condition: AVERAGE
+FSA: L0H
+gcode_City: WHITCHURCH STOUFFVILLE
+Basement: FINISHED
+Parking_Type: ATTACHED-GARAGE
+Ownership: PRA_FEE_SIMPLE1
+gcode_MatchStatus: __NA__
+```
+
+### Plan for final testing on never-before-seen data
+
+For the final report, we will reserve a **strict holdout set** that is not used for *any* tuning, sweeps, or early stopping decisions:
+- **Preferred:** hold out the **latest time window** (e.g., the most recent year/quarter block) and evaluate once, after locking the model + hyperparameters.
+- **If feasible:** obtain a fresh extract of transactions from the same pipeline after the current snapshot cut-off (true “new data”), or evaluate on a separate dataset from a different source (not used anywhere during development).
+
+### Challenges encountered
+
+- **High-cardinality categoricals:** several columns have thousands of unique values (e.g., `PropertyStyle`, `PropertyUse`), which makes one-hot encoding impractical; we use embeddings / fixed effects instead.
+- **Missingness + sentinels:** the CSV contains mixed missing tokens and sentinel values (e.g., `-999`) that must be normalized consistently.
+- **Time leakage risk:** random splits mix years, so we added a time-based split (`--split-strategy time`) to measure “future” generalization.
+
 ## 3) Features used
 
 Two feature sets exist because we started with your “minimal” list and later added a richer set that improved accuracy a lot:

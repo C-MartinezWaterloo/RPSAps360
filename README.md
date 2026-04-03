@@ -4,6 +4,10 @@ This repo prepares a housing transaction dataset into PyTorch tensors, trains mu
 
 For a detailed write-up of the pipeline and the results, see `REPORT.md`.
 For a PDF-style write-up with embedded graphs, see `report.tex`.
+Model-specific PDF-style write-ups:
+- Hedonic baseline: `hedonic_baseline_report.tex`
+- Primary model (ANN): `ann_primary_report.tex`
+- DeepFM: `deepfm_report.tex`
 
 ## Files
 - `prepare_ann_tensors.py` – reads the raw CSV and writes `.pt` tensors
@@ -23,6 +27,9 @@ For a PDF-style write-up with embedded graphs, see `report.tex`.
 - `export_results.py` – merges all run logs into **one** file: `results_all.csv`
 - `results_all.csv` – **canonical** results file for GitHub
 - `report.tex` – LaTeX report (pgfplots graphs + tables)
+- `hedonic_baseline_report.tex` – hedonic baseline write-up (diagram + learning curves + qualitative graphs)
+- `ann_primary_report.tex` – primary model write-up (ANN diagram + complexity + quantitative + qualitative results)
+- `deepfm_report.tex` – DeepFM write-up (architecture diagram + sweeps + robustness + qualitative graphs)
 - `models/` – short docs per model (Hedonic, ANN, FM, DeepFM, TabNet, planned XGBoost)
 
 ## Quick start

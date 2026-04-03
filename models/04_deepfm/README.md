@@ -3,6 +3,7 @@
 **Scripts:**
 - Single run: `train_deepfm.py`
 - Sweep: `sweep_deepfm.py`
+**Write-up (PDF-style):** `deepfm_report.tex`
 
 ## What it is
 DeepFM combines:

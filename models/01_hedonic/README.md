@@ -1,6 +1,7 @@
 # Model 1 — Hedonic regression (baseline)
 
 **Script:** `hedonic_baseline.py`
+**Write-up (PDF-style):** `hedonic_baseline_report.tex`
 
 ## What it is
 A classic housing baseline:
@@ -17,4 +18,3 @@ python export_results.py
 - `test_rmse`: RMSE in `log1p(price)` space (lower is better)
 - `test_mdape`: median APE in price space (lower is better)
 - `test_acc_pct`: `max(0, 100*(1 - test_mdape))` (higher is better)
-

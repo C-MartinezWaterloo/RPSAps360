@@ -20,6 +20,12 @@
 \usepackage{hyperref}
 \usepackage{pgfplots}
 \usepackage{subcaption}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{listings}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta}
 
 \pgfplotsset{compat=1.18}
 \sisetup{detect-weight=true, detect-family=true}
@@ -30,8 +36,18 @@
   citecolor=blue!60!black
 }
 
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  columns=fullflexible,
+  frame=single,
+  framerule=0.3pt,
+  rulecolor=\color{black!20},
+  upquote=true
+}
+
 % -----------------------------
-% Key numbers (auto-copied from results_all.csv / REPORT.md as of 2026-03-11)
+% Key numbers (auto-copied from results_all.csv / REPORT.md)
 % -----------------------------
 \newcommand{\NTotal}{597{,}928}
 \newcommand{\NTrain}{418{,}549}
@@ -74,28 +90,69 @@
 \newcommand{\BestAnnRunName}{\texttt{full\_deep4\_bs512\_lr4e-3\_do0.1\_wd1e-3}}
 \newcommand{\BestAnnTestRmse}{0.1433}
 \newcommand{\BestAnnTestAcc}{92.62}
+\newcommand{\BestAnnParams}{629{,}340}
+\newcommand{\BestAnnSeconds}{185.13}
 
 \newcommand{\BestDeepfmRunName}{\texttt{deepfm\_best\_fulltrain\_seed1}}
 \newcommand{\BestDeepfmTestRmse}{0.1621}
 \newcommand{\BestDeepfmTestAcc}{91.80}
+\newcommand{\BestDeepfmParams}{3{,}146{,}151}
+\newcommand{\BestDeepfmSeconds}{677.86}
 
 \newcommand{\BestHedTestRmse}{0.2428}
 \newcommand{\BestHedTestAcc}{87.74}
+\newcommand{\BestHedParams}{7{,}254}
+\newcommand{\BestHedSeconds}{78.98}
+
+% Naïve constant baselines (full features, random split seed=42): predict mean/median of train log1p(price)
+\newcommand{\NaiveMeanTestRmse}{0.5618}
+\newcommand{\NaiveMeanTestAcc}{66.10}
+\newcommand{\NaiveMedianTestRmse}{0.5622}
+\newcommand{\NaiveMedianTestAcc}{66.28}
 
 \title{House Price Modeling (Hedonic vs Neural Tabular Models)\\
 \large Experimental Evaluation, Robustness, and Feature Insights}
+% TODO (submission): replace with your name(s) / student number(s).
 \author{RPSAps360 Project}
-\date{March 11, 2026}
+\date{\today}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-This report summarizes an end-to-end pipeline for predicting \texttt{TransactionPrice} from housing transaction data, compares a classic hedonic regression baseline to multiple neural tabular models (ANN, FM, DeepFM, TabNet), and strengthens experimental evaluation via multiple random seeds, multiple data splits, and a time-based split (training on earlier years and testing on later years). Results are tracked in a single canonical spreadsheet (\texttt{results\_all.csv}); an interactive dashboard (\texttt{plots/report\_graphs.html}) provides one-click PNG/SVG exports of all plots.
+This report summarizes an end-to-end pipeline for predicting \texttt{TransactionPrice} from housing transaction data, compares a classic hedonic regression baseline to multiple neural tabular models (ANN, FM, DeepFM, TabNet), and strengthens evaluation via multiple random seeds, multiple data splits, and a time-based split (training on earlier years and testing on later years). On the full feature set with a 70/15/15 random split, the best ANN achieves test RMSE(log) \(\approx\)\BestAnnTestRmse with \(\approx\)\BestAnnTestAcc\% accuracy, compared to a hedonic baseline at \BestHedTestRmse RMSE(log) and \BestHedTestAcc\% accuracy. Results are tracked in a single canonical spreadsheet (\texttt{results\_all.csv}); an interactive dashboard (\texttt{plots/report\_graphs.html}) provides one-click PNG/SVG exports of all plots.
 \end{abstract}
 
-\section{Project proposal context (data source and motivation)}
+\tableofcontents
+\newpage
+
+\section{Executive summary (pick-and-choose)}
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Data:} \NTotal transactions, split 70/15/15 into \NTrain / \NVal / \NTest.
+  \item \textbf{Best overall model so far (random split, full features):} ANN with test RMSE(log) \(\approx\)\textbf{\BestAnnTestRmse} and test accuracy \(\approx\)\textbf{\BestAnnTestAcc\%}. The hedonic baseline achieves \BestHedTestRmse RMSE(log) and \BestHedTestAcc\% accuracy; DeepFM is competitive at \BestDeepfmTestRmse RMSE(log) and \BestDeepfmTestAcc\% accuracy.
+  \item \textbf{Robustness (multiple seeds/splits):} across 21 random-split checks, ANN averages \AnnRandRmseMean\(\pm\)\AnnRandRmseStd RMSE(log) and \AnnRandAccMean\(\pm\)\AnnRandAccStd\% accuracy, vs hedonic \HedRandRmseMean\(\pm\)\HedRandRmseStd RMSE(log) and \HedRandAccMean\(\pm\)\HedRandAccStd\% accuracy.
+  \item \textbf{Time-based split (future generalization):} performance drops (harder setting), but ANN remains much stronger than hedonic: ANN \AnnTimeRmseMean\(\pm\)\AnnTimeRmseStd RMSE(log), \AnnTimeAccMean\(\pm\)\AnnTimeAccStd\% accuracy vs hedonic \HedTimeRmseMean\(\pm\)\HedTimeRmseStd RMSE(log), \HedTimeAccMean\(\pm\)\HedTimeAccStd\% accuracy.
+  \item \textbf{Why neural models help:} location + time dominate importance; ANN captures nonlinearities/interactions (size\(\times\)location, time trends by neighborhood, diminishing returns to area) that a linear hedonic model cannot.
+  \item \textbf{Deliverables for writing:} a single results sheet (\texttt{results\_all.csv}), an offline dashboard with download buttons (\texttt{plots/report\_graphs.html}), and the narrative write-up in this PDF.
+\end{itemize}
+
+\section{Introduction (problem, data source, and motivation)}
+\paragraph{Problem statement.}
+Given a housing transaction record with property attributes (e.g., size, beds/baths), location signals (e.g., FSA/city, lat/lon), and transaction time (year/quarter), the goal is to predict \texttt{TransactionPrice}. We treat this as a regression task and train all models to predict \(\log(1+\texttt{TransactionPrice})\) for numerical stability.
+
+\paragraph{What ``perfect'' looks like for the report.}
+For a high-scoring submission, this document includes: (i) clear data processing and split logic, (ii) a strong baseline, (iii) a clearly defined primary model with an architecture diagram and complexity, (iv) clean experiment tracking, (v) quantitative and qualitative results, (vi) robustness checks, (vii) discussion/limitations, (viii) ethical considerations and responsible-use notes, and (ix) reproducibility pointers.
+
+\subsection{Project proposal context (data source and motivation)}
 The project proposal describes the RPS housing database as an aggregation of multiple sources (including appraisal workflows and franchise back-office transaction feeds). In particular, RPS coordinates on the order of \(\sim\)\num{180000} appraisals/year and extracts structured information from standardized appraisal forms. Appraisal reports include neighborhood/site descriptions, building attributes (exterior/interior), and a sales-comparison approach with comparable recent transactions. The proposal also notes that the data pipeline includes reconciliation across sources, geocoding, and standardization; and that outputs are produced in aggregate without personally identifiable information. (Source: \texttt{RPS Database.docx}.)
+
+\paragraph{Proposal highlights (paraphrased).}
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Multiple data sources:} (i) appraisal reports captured via RPS form technology (machine-readable XML) and (ii) franchise back-office feeds containing address/date/price information for transactions.
+  \item \textbf{Comparable-sales emphasis:} the proposal emphasizes the sales comparison approach (three or more recent comparable MLS sales in geographic/time proximity) as a key driver of appraisal value, suggesting strong nonlinear and interaction effects between location, time, and property attributes.
+  \item \textbf{Cleaning/standardization:} reconciling duplicate sightings of the same transaction across sources, applying geocoding, and standardizing fields into a structured database.
+  \item \textbf{Coverage:} the proposal claims broad market coverage (a large fraction of transactions) after unifying sources, enabling representative analytics products.
+\end{itemize}
 
 \section{Data preparation (cleaning and tensorization)}
 All modeling in this repository starts from a cleaned CSV (\texttt{cleaned\_transaction\_gtha-2.csv}, kept local) and converts it into a single PyTorch tensor file using \texttt{prepare\_ann\_tensors.py}. The preparation step performs:
@@ -107,24 +164,227 @@ All modeling in this repository starts from a cleaned CSV (\texttt{cleaned\_tran
   \item \textbf{Targets:} stores both raw \texttt{y} and \texttt{y\_log1p = log1p(y)} for stable training.
 \end{itemize}
 
-Two feature sets are used:
+\subsection{Two-pass tensorization (implementation details)}
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Pass 1 (streaming scan):} iterate through the CSV once to (i) compute mean/std for each numeric feature using Welford’s algorithm, (ii) count category frequencies for each categorical column, and (iii) count how many rows are kept after target filtering.
+  \item \textbf{Vocabulary build:} sort categories by frequency and map them to integer indices; reserve \texttt{\_\_NA\_\_} for missing values and optionally \texttt{\_\_OTHER\_\_} for rare categories if a cap is enabled.
+  \item \textbf{Pass 2 (tensor materialization):} allocate arrays of the final size and re-scan the CSV to populate standardized numeric tensors and categorical index tensors. Numeric missing values are imputed with the training-wide mean; categorical missing values map to \texttt{\_\_NA\_\_}.
+  \item \textbf{Saved metadata:} numeric/categorical column lists, numeric stats, category maps, and the chosen \texttt{feature\_set}. This keeps training scripts simple and makes experiments reproducible.
+\end{itemize}
+
+\subsection{Feature sets}
+This repo supports three feature sets (defined in \texttt{prepare\_ann\_tensors.py}):
 \begin{itemize}[leftmargin=*]
   \item \textbf{basic:} a minimal subset of property attributes (size, beds/baths, style/condition).
-  \item \textbf{full:} adds location (lat/lon, city, FSA), time (\texttt{TransactionYear}, \texttt{Quarter}), and additional property attributes; this yields a large accuracy improvement.
+  \item \textbf{basic\_time:} \textbf{basic} plus transaction time (\texttt{TransactionYear}, \texttt{Quarter}) for forecasting-style evaluation.
+  \item \textbf{full:} adds location (lat/lon, city, FSA), time, and additional property attributes; this yields the largest accuracy improvements.
 \end{itemize}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\linewidth}{@{}l>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
+\toprule
+Feature set & Numeric features & Categorical features \\
+\midrule
+\textbf{basic} &
+\texttt{LivingArea, LotSize, YearBuilt, DistanceToSubj, Bath\_Full, Bath\_Half, Bed\_Full, Bed\_Half} &
+\texttt{BuildingType, PropertyStyle, Condition} \\
+\addlinespace
+\textbf{basic\_time} &
+\texttt{(basic)} + \texttt{TransactionYear, Quarter} &
+\texttt{(basic)} \\
+\addlinespace
+\textbf{full} &
+\texttt{(basic)} + \texttt{gcode\_Lat, gcode\_Lon, TransactionYear, Quarter, DOM, Parking\_Count, LandValue, ReplacementCost, KitchenCount, EntranceCount} &
+\texttt{(basic)} + \texttt{FSA, gcode\_City, Basement, Parking\_Type, Ownership, PropertyUse, BRPS\_Style, gcode\_MatchStatus} \\
+\bottomrule
+\end{tabularx}
+\caption{Feature inventory used for tensorization. This table is intentionally copy/paste-friendly for report writing.}
+\label{tab:feature-inventory}
+\end{table}
 
 \paragraph{Dataset size.}
 For the full-feature tensor file, the dataset contains \textbf{\NTotal} transactions. With a 70/15/15 split, this corresponds to \textbf{\NTrain} train, \textbf{\NVal} validation, and \textbf{\NTest} test samples.
 
+\subsection{Dataset statistics (post-cleaning)}
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Price distribution (raw \texttt{TransactionPrice}):} min \$10{,}000; p10 \$301{,}000; median \$570{,}000; p90 \$1{,}181{,}000; max \$22{,}000{,}000.
+  \item \textbf{Living area (\texttt{LivingArea}):} p10 \(\approx\) 812; median \(\approx\) 1{,}550; p90 \(\approx\) 2{,}834 (units as provided by the source).
+  \item \textbf{Time coverage (\texttt{TransactionYear}):} recovered range 1910--2201 due to rare outliers; 99.97\% of rows fall in 2000--2025.
+\end{itemize}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}lr@{}}
+\toprule
+Categorical column & Unique tokens \\
+\midrule
+\texttt{BuildingType} & 995 \\
+\texttt{PropertyStyle} & 3{,}356 \\
+\texttt{Condition} & 8 \\
+\texttt{FSA} & 234 \\
+\texttt{gcode\_City} & 325 \\
+\texttt{Basement} & 6 \\
+\texttt{Parking\_Type} & 8 \\
+\texttt{Ownership} & 5 \\
+\texttt{PropertyUse} & 2{,}284 \\
+\texttt{BRPS\_Style} & 9 \\
+\texttt{gcode\_MatchStatus} & 5 \\
+\bottomrule
+\end{tabular}
+\caption{Categorical vocab sizes in \texttt{ann\_tensors\_full.pt} (includes \texttt{\_\_NA\_\_}). High-cardinality columns motivate embedding/fixed-effect representations rather than one-hot encoding.}
+\label{tab:cat-cardinalities}
+\end{table}
+
+\subsection{Example cleaned training sample (one row)}
+The following is one representative example of the cleaned feature values consumed by models (no address-level identifiers). Missing categoricals are encoded as \texttt{\_\_NA\_\_}.
+\begin{lstlisting}
+TransactionPrice: 600000
+TransactionYear: 2009
+Quarter: 2
+
+LivingArea: 2160
+LotSize: 35719
+YearBuilt: 1989
+Bath_Full: 2
+Bath_Half: 1
+Bed_Full: 3
+
+BuildingType: DETACHED
+PropertyStyle: 1 STOREY
+Condition: AVERAGE
+FSA: L0H
+gcode_City: WHITCHURCH STOUFFVILLE
+Basement: FINISHED
+Parking_Type: ATTACHED-GARAGE
+Ownership: PRA_FEE_SIMPLE1
+gcode_MatchStatus: __NA__
+\end{lstlisting}
+
 \section{Models}
 \begin{itemize}[leftmargin=*]
-  \item \textbf{Hedonic regression (linear fixed effects):} linear model on standardized numeric features plus categorical offsets (implemented as 1D embeddings).
+  \item \textbf{Hedonic regression (linear fixed effects):} linear model on standardized numeric features plus categorical offsets (implemented as 1D embeddings). This matches the classic hedonic pricing framing where price is decomposed into contributions from attributes and location/time effects \cite{rosen1974hedonic}.
   \item \textbf{ANN (embeddings + MLP):} categorical embeddings concatenated with numeric features and passed through an MLP.
-  \item \textbf{FM:} Factorization Machine capturing pairwise interactions via low-rank factors.
-  \item \textbf{DeepFM:} linear + FM interactions + a deep MLP.
-  \item \textbf{TabNet:} sequential feature selection with sparse masks.
-  \item \textbf{Planned baselines: XGBoost/LightGBM.} These are strong tabular baselines but require compiled dependencies. A runner script is provided for external execution: \texttt{models/06\_xgboost/train\_boosting.py}.
+  \item \textbf{FM:} Factorization Machine capturing pairwise interactions via low-rank factors \cite{rendle2010fm}.
+  \item \textbf{DeepFM:} linear + FM interactions + a deep MLP \cite{guo2017deepfm}.
+  \item \textbf{TabNet:} sequential feature selection with sparse masks \cite{arik2019tabnet}.
+  \item \textbf{Planned baselines: XGBoost/LightGBM.} These are often very strong for tabular data \cite{chen2016xgboost,ke2017lightgbm} but require compiled dependencies. A runner script is provided for external execution: \texttt{models/06\_xgboost/train\_boosting.py}.
 \end{itemize}
+
+\section{Related work (why these baselines)}
+\paragraph{Hedonic regression.}
+The ``hedonic'' baseline is a long-standing approach in housing economics and appraisal practice, where value is modeled as a function of observable attributes and location/time effects \cite{rosen1974hedonic}. In modern ML terms, it is a strong linear baseline on well-engineered features and a useful reference point for whether nonlinear/interaction models add measurable value.
+
+\paragraph{Neural tabular models and interactions.}
+Tabular prediction often benefits from modeling interactions between variables (e.g., size$\times$location, time$\times$neighborhood). Factorization Machines (FM) efficiently represent pairwise interactions through low-rank factors \cite{rendle2010fm}, while DeepFM combines linear terms, FM interactions, and a deep network \cite{guo2017deepfm}. TabNet provides an alternative inductive bias via attentive feature selection and sparse masks \cite{arik2019tabnet}.
+
+\paragraph{Tree boosting as a standard comparator.}
+Gradient-boosted decision trees (XGBoost/LightGBM) are widely used as strong baselines for tabular tasks \cite{chen2016xgboost,ke2017lightgbm}. This repo keeps boosting runs optional (external environment) but includes a runner script for fair comparison.
+
+\section{Primary model (ANN): architecture + feasibility evidence}
+This section follows the ``Primary Model'' checklist from the project requirements: provide a clear architecture diagram, complexity, and at least one quantitative and qualitative result for the best model so far. A longer standalone write-up is also available in \texttt{ann\_primary\_report.tex}.
+
+\subsection{Architecture diagram and complexity}
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[
+  node/.style={draw, rounded corners, align=center, inner sep=5pt, font=\\small},
+  arrow/.style={-Latex, thick},
+  box/.style={node, fill=blue!6, draw=blue!50!black},
+  emb/.style={node, fill=orange!10, draw=orange!70!black},
+  mlp/.style={node, fill=green!10, draw=green!60!black}
+]
+\node[box] (num) {Numeric\\features\\(\(18\))};
+\node[box, right=18mm of num] (cat) {Categorical\\indices\\(\(11\) cols)};
+\node[emb, right=18mm of cat] (embs) {Per-column\\embeddings\\(\(\le 64\) dims)};
+\node[box, below=10mm of embs] (concat) {Concatenate\\(215-dim)};
+\node[mlp, right=18mm of concat] (mlp1) {MLP\\\texttt{512→256→128→64}\\ReLU + Dropout 0.1};
+\node[box, right=18mm of mlp1] (out) {Output\\\(\hat{y}=\log(1+\hat{p})\)};
+
+\draw[arrow] (num) -- (concat);
+\draw[arrow] (cat) -- (embs);
+\draw[arrow] (embs) -- (concat);
+\draw[arrow] (concat) -- (mlp1);
+\draw[arrow] (mlp1) -- (out);
+\end{tikzpicture}
+\caption{Primary model architecture: categorical embeddings + MLP predicting \texttt{log1p(TransactionPrice)}.}
+\label{fig:primary-ann-arch}
+\end{figure}
+
+\paragraph{Complexity and reproducible hyperparameters (best run).}
+For the best full-feature random-split run (\BestAnnRunName), the ANN has \(\approx\)\BestAnnParams parameters and uses:
+\begin{itemize}[leftmargin=*]
+  \item \texttt{hidden\_dims=512,256,128,64} (4 hidden layers) with ReLU
+  \item \texttt{dropout=0.1}, \texttt{embed\_dim\_cap=64}
+  \item AdamW with \texttt{lr=0.004}, \texttt{weight\_decay=0.001}, \texttt{batch\_size=512}, \texttt{epochs=30}
+  \item Best checkpoint selected by lowest validation MSE (early stopping by validation)
+  \item Typical training time logged for this run: \(\approx\)\BestAnnSeconds seconds (hardware-dependent)
+\end{itemize}
+
+\subsection{Quantitative result: learning curve and best-checkpoint performance}
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  xlabel={Epoch},
+  ylabel={Validation RMSE(log)},
+  xmin=1, xmax=30,
+  ymin=0.13, ymax=0.60,
+  ymajorgrids=true,
+  xmajorgrids=true,
+]
+\addplot+[mark=*, mark size=1.0pt, color=blue!70!black] coordinates {
+  (1,0.450544) (2,0.466490) (3,0.577868) (4,0.348379) (5,0.200257)
+  (6,0.195003) (7,0.180563) (8,0.204513) (9,0.166933) (10,0.162415)
+  (11,0.165542) (12,0.161614) (13,0.153863) (14,0.152829) (15,0.148012)
+  (16,0.153378) (17,0.145649) (18,0.144533) (19,0.145887) (20,0.148402)
+  (21,0.147381) (22,0.144280) (23,0.151947) (24,0.145088) (25,0.143164)
+  (26,0.148880) (27,0.144925) (28,0.138833) (29,0.141125) (30,0.139866)
+};
+\addplot+[only marks, mark=star, mark size=2.0pt, color=red!70!black] coordinates {(28,0.138833)};
+\end{axis}
+\end{tikzpicture}
+\caption{Primary ANN validation learning curve (full features, random split, seed=42). Best checkpoint occurs at epoch 28.}
+\label{fig:primary-ann-curve}
+\end{figure}
+
+\paragraph{Best-checkpoint test performance.}
+On full features (random split), the best ANN achieves test RMSE(log) \(\approx\)\BestAnnTestRmse\ and test accuracy \(\approx\)\BestAnnTestAcc\% (MdAPE-derived). Robustness results across multiple split seeds and model seeds are reported in Section~\ref{sec:results} and in \texttt{results\_all.csv}.
+
+\subsection{Qualitative result: selected test examples}
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\linewidth}{@{}lrrrr>{\raggedright\arraybackslash}X@{}}
+\toprule
+Example & True price & Pred price & APE (\%) & Year & Context (FSA / City) \\
+\midrule
+\textbf{p5 (very accurate)} & \$1{,}020{,}000 & \$1{,}026{,}681 & 0.66 & 2015 & \texttt{M3H} / TORONTO \\
+\textbf{p50 (typical)} & \$797{,}900 & \$738{,}979 & 7.38 & 2013 & \texttt{L4C} / RICHMOND HILL \\
+\textbf{p95 (large error)} & \$260{,}000 & \$334{,}129 & 28.51 & 2013 & \texttt{L6T} / BRAMPTON \\
+\bottomrule
+\end{tabularx}
+\caption{Three representative ANN test examples chosen by APE percentiles (5th/50th/95th). This illustrates typical vs worst-case error in price space.}
+\label{tab:primary-ann-examples}
+\end{table}
+
+\section{Experiment tracking (one canonical results sheet)}
+\paragraph{One CSV rule.}
+All results are consolidated into \texttt{results\_all.csv}. Individual scripts may write intermediate run logs (gitignored) such as \texttt{ann\_runs.csv}, \texttt{eval\_runs.csv}, \texttt{tabnet\_sweep\_results.csv}, etc. The merger script \texttt{export\_results.py} de-duplicates and writes the single canonical sheet.
+
+\paragraph{Key columns (how to read \texttt{results\_all.csv}).}
+\begin{itemize}[leftmargin=*]
+  \item \texttt{source} / \texttt{stage}: where the row came from (single run vs sweep vs robustness suite).
+  \item \texttt{model}: model family (\texttt{ann\_mlp}, \texttt{hedonic\_linear\_fixed\_effects}, \texttt{deepfm}, \texttt{tabnet}, \dots).
+  \item \texttt{feature\_set}, \texttt{split\_strategy}, \texttt{seed}, \texttt{split\_seed}: experimental controls.
+  \item Metrics: \texttt{train\_*}, \texttt{val\_*}, \texttt{test\_*} for RMSE/MdAPE/accuracy.
+  \item Overfitting proxy: \texttt{*\_last} columns store metrics from the \emph{final} epoch; the non-\texttt{*\_last} values correspond to the \emph{best validation checkpoint}.
+\end{itemize}
+
+\paragraph{Graph pack for the report.}
+Run \texttt{make\_report\_graphs.py} to produce \texttt{plots/report\_graphs.html} (offline). Each figure includes explicit \emph{Download PNG} / \emph{Download SVG} buttons plus a \emph{Download all} panel.
 
 \section{Experimental setup and metrics}
 \subsection{Splits}
@@ -141,10 +401,53 @@ All models predict \texttt{log1p(TransactionPrice)} and report:
   \item \textbf{Accuracy\%:} derived as \(\max(0, 100\cdot(1-\text{MdAPE}))\).
 \end{itemize}
 
+\paragraph{Formal definitions.}
+Let \(p_i\) be the true price and let the model predict \(\hat{y}_i \approx \log(1+p_i)\).
+Define \(y_i = \log(1+p_i)\) and \(\hat{p}_i = \exp(\hat{y}_i)-1\).
+Then:
+\[
+  \mathrm{RMSE}_{\log} = \sqrt{\frac{1}{N}\sum_{i=1}^N(\hat{y}_i - y_i)^2},
+\]
+\[
+  \mathrm{APE}_i = \frac{|\hat{p}_i - p_i|}{p_i},\quad
+  \mathrm{MdAPE} = \mathrm{median}_i(\mathrm{APE}_i),\quad
+  \mathrm{Accuracy}\% = \max\!\bigl(0,\,100\cdot(1-\mathrm{MdAPE})\bigr).
+\]
+
+\subsection{Checkpoint selection, overfitting, and test-set hygiene}
+Neural models are trained for a fixed number of epochs but select the \emph{best validation checkpoint} (lowest validation MSE) for final reporting. For many sweeps, we also log \texttt{*\_last} metrics (final epoch) so the report can illustrate overfitting (e.g., validation performance that degrades after the best epoch).
+
+To keep evaluation clean:
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Test-clean sweeps:} \texttt{sweep\_ann.py} selects hyperparameters using validation only and evaluates the test set once per selected configuration.
+  \item \textbf{Exploratory sweeps:} \texttt{sweep\_ann\_deep\_test.py} computes test metrics for every run; these rows are useful for exploration but should not be used for final model selection.
+\end{itemize}
+
+\paragraph{Why do some runs use \texttt{train\_max\_samples=50,000}?}
+Large randomized sweeps often cap training rows for speed (especially for TabNet/DeepFM sweeps). The \emph{best} headline results in this report include full-train runs (\(\approx\)\NTrain training rows) explicitly labeled in \texttt{results\_all.csv}.
+
 \subsection{Robustness}
 To ensure observed differences are not due to a favorable split or initialization, the best ANN configuration and the hedonic baseline are re-run across multiple \texttt{split\_seed}s and \texttt{seed}s using \texttt{eval\_suite.py}. These runs are recorded under \texttt{source=eval\_suite} in \texttt{results\_all.csv}.
 
-\section{Results}
+\section{Results}\label{sec:results}
+\subsection{Naïve baselines (sanity check)}
+As a simple reference point, we evaluate constant predictors that ignore all features and always output the training-set mean or median of \(\log(1+\text{price})\). These baselines confirm the task is non-trivial and provide a floor for performance.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Baseline & Test RMSE(log) & Test Acc.\ (\%) \\
+\midrule
+Constant mean & \NaiveMeanTestRmse & \NaiveMeanTestAcc \\
+Constant median & \NaiveMedianTestRmse & \NaiveMedianTestAcc \\
+\bottomrule
+\end{tabular}
+\caption{Naïve constant baselines on the full-feature random split (seed=42).}
+\label{tab:naive-baselines}
+\end{table}
+
 \subsection{Best single-run configurations (full features, full train)}
 Table~\ref{tab:best-single} lists representative full-train runs for the top-performing models.
 
@@ -161,6 +464,43 @@ Hedonic (baseline) & \BestHedTestRmse & \BestHedTestAcc & 20 & 8192 \\
 \end{tabular}
 \caption{Best single-run performance on full features. ANN run name: \BestAnnRunName. DeepFM run name: \BestDeepfmRunName. Full results are tracked in \texttt{results\_all.csv}.}
 \label{tab:best-single}
+\end{table}
+
+\subsection{Model size and training cost (representative full-train runs)}
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Model & Parameters & Epochs & Batch size & Seconds \\
+\midrule
+ANN (best) & \BestAnnParams & 30 & 512 & \BestAnnSeconds \\
+DeepFM (best) & \BestDeepfmParams & 40 & 4096 & \BestDeepfmSeconds \\
+Hedonic (baseline) & \BestHedParams & 20 & 8192 & \BestHedSeconds \\
+\bottomrule
+\end{tabular}
+\caption{Model size and training time as logged in \texttt{results\_all.csv}. Wall-clock time is hardware-dependent and is provided to justify feasibility rather than as a universal benchmark.}
+\label{tab:model-cost}
+\end{table}
+
+\subsection{Best sweep results (full features, 50k train cap)}
+Sweeps are useful for broad hyperparameter exploration but are frequently run with \texttt{train\_max\_samples=50,000}. Table~\ref{tab:best-sweeps} summarizes representative best sweep runs (random split).
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}lrrrl@{}}
+\toprule
+Model family & Train rows & Test RMSE(log) & Test Acc.\ (\%) & Notes \\
+\midrule
+ANN sweep (deep\_test) & 50{,}000 & 0.2564 & 88.02 & deep MLP (e.g.\ \texttt{2048→1024→512}) \\
+DeepFM sweep & 50{,}000 & 0.2851 & 89.70 & interaction dim \texttt{k=16} + deep MLP \\
+FM sweep & 50{,}000 & 0.4056 & 88.33 & strong MdAPE accuracy but higher tail error \\
+TabNet sweep & 50{,}000 & 0.3948 & 78.46 & initial tuning only (see \texttt{models/05\_tabnet}) \\
+\bottomrule
+\end{tabular}
+\caption{Representative best sweep results on full features. Full-train runs (Table~\ref{tab:best-single}) outperform sweeps.}
+\label{tab:best-sweeps}
 \end{table}
 
 \subsection{Random split: mean $\pm$ std across seeds}
@@ -433,6 +773,26 @@ Large sweeps (ANN deep-test, FM, DeepFM, TabNet) often cap training rows to 50,0
 \label{fig:sweep-scatter}
 \end{figure}
 
+\section{Hyperparameter and architecture conclusions (so far)}
+This section summarizes repeatable patterns observed in \texttt{results\_all.csv} and \texttt{REPORT.md}. It is intended as ``grab bag'' language for a final write-up.
+
+\subsection{ANN (embeddings + MLP)}
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Depth helps on full features.} The best full-train run uses a deeper MLP (\texttt{512→256→128→64}) rather than a shallow network.
+  \item \textbf{Regularization matters.} Moderate dropout (\(\approx\)0.05--0.10) and weight decay (\(\approx\)\(5\times10^{-4}\) to \(10^{-3}\)) improve validation/test performance and reduce overfitting.
+  \item \textbf{Learning rate sweet spot.} For the best full-feature runs, \texttt{lr} around \(\approx\)0.003--0.004 performs best; overly small or large learning rates degrade performance.
+  \item \textbf{Embeddings: diminishing returns.} Increasing \texttt{embed\_dim\_cap} above 64 did not consistently improve the top runs in this project.
+\end{itemize}
+
+\subsection{FM and DeepFM}
+\begin{itemize}[leftmargin=*]
+  \item \textbf{FM improves over linear on capped-data sweeps,} but tends to have worse tail error than the best ANN/DeepFM full-train runs.
+  \item \textbf{DeepFM benefits from both interactions and depth.} The best DeepFM configurations combine a nontrivial factor dimension (\texttt{k}) with a large MLP; however, these sweeps were often run with a 50k train cap for speed.
+\end{itemize}
+
+\subsection{TabNet}
+Across the initial sweep, TabNet underperformed ANN/DeepFM in this setup. This may be due to (i) limited tuning, (ii) sensitivity to optimization settings, and/or (iii) the strong benefit of learned embeddings for high-cardinality categoricals.
+
 \section{Feature importance (permutation analysis)}
 To interpret model improvements, we compute permutation feature importance on a validation subset (20k rows) by measuring the increase in validation MSE when permuting one feature at a time.
 
@@ -512,13 +872,24 @@ Both models benefit strongly from adding time and location signals (e.g.\ \textt
 \paragraph{Random vs time splits.}
 Random splits measure interpolation across mixed time periods; time splits are closer to a forecasting evaluation. Performance drops notably under time splits for all models, but the ANN retains a large advantage (\(\approx\) 13.4 percentage points higher test accuracy than the hedonic baseline on average in our time-split checks).
 
+\section{Ethical considerations and responsible use}
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Privacy and data governance.} This report intentionally avoids address-level identifiers and uses aggregated geographic signals (e.g., FSA/city, lat/lon) to reduce privacy risk. Any real deployment should confirm legal/contractual permission for model training, retention policies, and strict access controls to the underlying dataset.
+  \item \textbf{Bias and downstream impact.} Housing prices reflect historical inequities; a predictive model can encode and amplify these patterns. If used in lending, insurance, tenant screening, or neighborhood ``risk'' scoring, this can create harmful feedback loops. Responsible use should include subgroup performance analysis (by region, property type, time window), careful policy constraints, and human oversight.
+  \item \textbf{Transparency.} We include interpretable baselines (hedonic regression), feature-importance analysis, and time-split evaluation. For high-stakes use, we recommend documenting model limitations, monitoring drift, and providing clear guidance on when predictions should \emph{not} be trusted (e.g., out-of-distribution transactions).
+\end{itemize}
+
 \section{Limitations and next steps}
 \begin{itemize}[leftmargin=*]
   \item \textbf{Preprocessing leakage:} current tensorization computes numeric mean/std and categorical vocab using the full dataset. A stricter setup would compute these on training data only per split.
   \item \textbf{Sweep hygiene:} \texttt{sweep\_ann\_deep\_test.py} evaluates test every run and should be treated as exploratory; \texttt{sweep\_ann.py} is the test-clean sweep.
+  \item \textbf{Never-before-seen final test:} reserve a strict holdout window (preferably the latest year/quarter block) that is not touched by any sweeps or early stopping decisions, and evaluate once after locking the model and hyperparameters. If feasible, obtain a fresh extract after the current snapshot cut-off (true new data).
   \item \textbf{Boosting baselines:} run XGBoost/LightGBM externally using \texttt{models/06\_xgboost/train\_boosting.py}, then merge \texttt{xgb\_runs.csv}/\texttt{lgbm\_runs.csv} into \texttt{results\_all.csv} via \texttt{export\_results.py}.
   \item \textbf{Interpretability:} extend feature analysis (e.g.\ partial dependence-style perturbations) on top drivers such as \texttt{LivingArea} and \texttt{TransactionYear}.
 \end{itemize}
+
+\section{Conclusion}
+On a large cleaned housing transaction dataset (\NTotal rows), a neural tabular ANN with categorical embeddings and a moderately deep MLP substantially outperforms a hedonic linear fixed-effects baseline on a random split (\BestAnnTestRmse vs \BestHedTestRmse test RMSE(log)). Robustness checks across multiple seeds and splits confirm this advantage is consistent, and time-based evaluation shows expected degradation while preserving a clear margin over the baseline. Overall, the strongest gains come from richer feature sets (especially location + time) and from models that can capture nonlinearities and interactions.
 
 \section*{Reproducibility pointers}
 \begin{itemize}[leftmargin=*]
@@ -527,7 +898,184 @@ Random splits measure interpolation across mixed time periods; time splits are c
   \item Merge all intermediate logs into the canonical sheet: \texttt{python export\_results.py}
 \end{itemize}
 
+\appendix
+
+\section{Appendix A: Robustness run tables (time split)}
+\subsection{ANN (eval\_suite)}
+\begin{longtable}{@{}rrrr@{}}
+\caption{ANN time-split runs (train earlier years, test later years).}\label{tab:ann-time-runs}\\
+\toprule
+split\_seed & seed & test RMSE(log) & test accuracy (\%) \\
+\midrule
+\endfirsthead
+\toprule
+split\_seed & seed & test RMSE(log) & test accuracy (\%) \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\bottomrule
+\endlastfoot
+7  & 0  & 0.3281 & 82.67 \\
+7  & 1  & 0.3183 & 83.44 \\
+7  & 42 & 0.2703 & 84.37 \\
+42 & 0  & 0.3319 & 81.84 \\
+42 & 1  & 0.3511 & 82.91 \\
+42 & 2  & 0.3727 & 77.27 \\
+42 & 3  & 0.3068 & 83.01 \\
+42 & 4  & 0.2915 & 83.75 \\
+42 & 42 & 0.2609 & 85.78 \\
+\end{longtable}
+
+\subsection{Hedonic baseline (eval\_suite)}
+\begin{longtable}{@{}rrrr@{}}
+\caption{Hedonic time-split runs (same split settings as Table~\ref{tab:ann-time-runs}).}\label{tab:hed-time-runs}\\
+\toprule
+split\_seed & seed & test RMSE(log) & test accuracy (\%) \\
+\midrule
+\endfirsthead
+\toprule
+split\_seed & seed & test RMSE(log) & test accuracy (\%) \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\bottomrule
+\endlastfoot
+7  & 0  & 0.6168 & 67.93 \\
+7  & 1  & 0.5752 & 70.42 \\
+7  & 42 & 0.5833 & 70.31 \\
+42 & 0  & 0.6106 & 68.20 \\
+42 & 1  & 0.5808 & 70.23 \\
+42 & 2  & 0.6059 & 68.73 \\
+42 & 3  & 0.5864 & 69.73 \\
+42 & 4  & 0.6114 & 68.11 \\
+42 & 42 & 0.5815 & 70.51 \\
+\end{longtable}
+
+\section{Appendix B: DeepFM full-train seeds (reference)}
+These runs were trained on full features with full training size (no 50k cap), using three seeds (0/1/42). They are included here because they are often cited as a strong tabular baseline family.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+Split & Seed & Test RMSE(log) & Test accuracy (\%) & Notes \\
+\midrule
+Random & 0  & 0.1712 & 90.86 & full train \\
+Random & 1  & 0.1621 & 91.80 & full train (best) \\
+Random & 42 & 0.1791 & 91.00 & full train \\
+\addlinespace
+Time & 0  & 0.3511 & 76.77 & full train \\
+Time & 1  & 0.3649 & 74.00 & full train \\
+Time & 42 & 0.3438 & 76.45 & full train (best) \\
+\bottomrule
+\end{tabular}
+\caption{DeepFM full-train seed runs (from \texttt{results\_all.csv}).}
+\label{tab:deepfm-seeds}
+\end{table}
+
+\section{Appendix C: Command cookbook (re-run anything)}
+\subsection{Tensorize data}
+\begin{lstlisting}[language=bash]
+# Full feature set (recommended)
+python prepare_ann_tensors.py --csv cleaned_transaction_gtha-2.csv \
+  --out ann_tensors_full.pt --feature-set full
+
+# Minimal feature set + time features (for forecasting-style eval)
+python prepare_ann_tensors.py --csv cleaned_transaction_gtha-2.csv \
+  --out ann_tensors_basic_time.pt --feature-set basic_time
+\end{lstlisting}
+
+\subsection{Train or sweep models}
+\begin{lstlisting}[language=bash]
+# Best ANN (full features, full train)
+python train_ann.py --data ann_tensors_full.pt --epochs 30 --batch-size 512 \
+  --lr 0.004 --weight-decay 0.001 --hidden-dims 512,256,128,64 \
+  --dropout 0.1 --embed-dim-cap 64 --seed 42 --run-name full_deep4_best
+
+# Hedonic baseline (full features)
+python hedonic_baseline.py --data ann_tensors_full.pt --epochs 20 --batch-size 8192
+
+# Sweeps (typically capped at 50k for speed)
+python sweep_ann.py --data ann_tensors_full.pt --n-runs 200 --resume
+python sweep_fm.py --data ann_tensors_full.pt --n-runs 200 --resume
+python sweep_deepfm.py --data ann_tensors_full.pt --n-runs 200 --resume
+python sweep_tabnet.py --data ann_tensors_full.pt --n-runs 200 --resume
+\end{lstlisting}
+
+\subsection{Robustness (multiple split seeds + model seeds)}
+\begin{lstlisting}[language=bash]
+# Re-run best ANN + hedonic across multiple random seeds and data splits
+python eval_suite.py --data ann_tensors_full.pt \
+  --models ann,hedonic \
+  --split-strategies random,time \
+  --split-seeds 42,7,123 \
+  --model-seeds 0,1,2,3,4,42 \
+  --out-csv eval_runs.csv
+\end{lstlisting}
+
+\subsection{Feature importance}
+\begin{lstlisting}[language=bash]
+python feature_importance.py --data ann_tensors_full.pt --val-max-samples 20000 \
+  --out-csv feature_importance_results.csv
+\end{lstlisting}
+
+\subsection{Merge results and generate graphs}
+\begin{lstlisting}[language=bash]
+# Merge ALL intermediate logs into the single canonical CSV
+python export_results.py
+
+# Generate the offline HTML dashboard (with download buttons)
+python make_report_graphs.py --results results_all.csv --out plots/report_graphs.html
+\end{lstlisting}
+
+\subsection{Boosting baselines (XGBoost / LightGBM)}
+The boosting runner is provided but requires installing external packages. Run in a separate environment, then merge into \texttt{results\_all.csv}:
+\begin{lstlisting}[language=bash]
+pip install xgboost lightgbm
+
+python models/06_xgboost/train_boosting.py --model xgboost --data ann_tensors_full.pt \
+  --split-strategy random --seed 42 --run-name xgb_full_seed42 --out-csv xgb_runs.csv
+
+python models/06_xgboost/train_boosting.py --model lightgbm --data ann_tensors_full.pt \
+  --split-strategy time --seed 42 --run-name lgbm_full_time_seed42 --out-csv lgbm_runs.csv
+
+python export_results.py
+\end{lstlisting}
+
+\section{Appendix D: Report-ready interpretation snippets}
+\paragraph{High-level (non-technical) wording.}
+Using a strong set of property, location, and time features, the neural network model predicts transaction prices substantially more accurately than a traditional hedonic regression baseline. The largest improvements come from capturing nonlinear relationships (e.g., diminishing returns to size) and interactions between location and time (market shifts that differ by neighborhood).
+
+\paragraph{Technical wording.}
+On the full feature set, the ANN achieves materially lower log-space error than the hedonic baseline and maintains this advantage under multiple random seeds and split seeds. Under time-based evaluation (train earlier years, test later years), all models degrade, but the ANN generalizes significantly better, indicating that its gains are not solely an artifact of random mixing across time.
+
+\section{Appendix E: Team contributions (fill for submission)}
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Name 1:} data cleaning + tensorization; experiment orchestration.
+  \item \textbf{Name 2:} ANN implementation/tuning; robustness evaluation.
+  \item \textbf{Name 3:} baselines (hedonic/FM/DeepFM/TabNet); analysis/plots.
+\end{itemize}
+
+\section{Appendix F: Grading checklist (quick navigation)}
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Data + preprocessing:} Executive summary, Introduction, and Data preparation; Appendix C (tensorization command).
+  \item \textbf{Baseline model:} Models (Hedonic regression) + Results (Table~\ref{tab:best-single}, Figures~\ref{fig:random-bars}--\ref{fig:time-bars}).
+  \item \textbf{Primary model details:} Primary model (ANN) section (Figure~\ref{fig:primary-ann-arch} + complexity bullets).
+  \item \textbf{Quantitative results:} Primary model learning curve + Results section (Section~\ref{sec:results}); Appendix A/B.
+  \item \textbf{Qualitative results:} Primary model selected examples (Table~\ref{tab:primary-ann-examples}).
+  \item \textbf{Robustness checks:} Seed sensitivity section; Appendix A/B.
+  \item \textbf{Ethics / responsible use:} Ethical considerations and responsible use section.
+  \item \textbf{Reproducibility:} Reproducibility pointers + Appendix C.
+\end{itemize}
+
 \begin{thebibliography}{9}
+\bibitem{rosen1974hedonic}
+Sherwin Rosen.
+\newblock Hedonic Prices and Implicit Markets: Product Differentiation in Pure Competition.
+\newblock \emph{Journal of Political Economy}, 82(1):34--55, 1974.
+
 \bibitem{rendle2010fm}
 Steffen Rendle.
 \newblock Factorization Machines.

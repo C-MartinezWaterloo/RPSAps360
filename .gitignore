@@ -26,6 +26,8 @@ deepfm_runs*.csv
 deepfm_sweep*.csv
 tabnet_runs*.csv
 tabnet_sweep*.csv
+fttransformer_runs*.csv
+fttransformer_sweep*.csv
 eval_runs*.csv
 feature_importance*.csv
 xgb_runs*.csv
