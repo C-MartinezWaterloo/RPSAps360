@@ -1,6 +1,11 @@
-# House Price Modeling Report (Hedonic + ANN + FM + DeepFM + TabNet)
+# House Price Modeling Report (Hedonic + ANN + FM + DeepFM + TabNet + Transformers)
 
 This document summarizes what was built in this repo, what data we trained on, what experiments were run, and what the results mean.
+
+**Where to look:**
+- APS360 submission report (LaTeX): `final_report.tex`
+- Graphs-only appendix (LaTeX): `graphs_report.tex`
+- Interactive dashboard (one-click PNG/SVG downloads): generate/open `plots/report_graphs.html` via `make_report_graphs.py` / `open_graphs.py`
 
 ## 1) What was built (end-to-end)
 
@@ -39,7 +44,11 @@ This document summarizes what was built in this repo, what data we trained on, w
 7) **Train a TabNet model** (`train_tabnet.py`, `sweep_tabnet.py`)
    - Sequential feature selection with sparse masks (sparsemax).
 
-8) **Merge all experiment logs into one file** (`export_results.py`)
+8) **Train Transformer baselines for tabular data**
+   - **FT-Transformer** (`train_fttransformer.py`): tokenizes each feature, applies multi-head self-attention, then an MLP head.
+   - **TabTransformer** (`train_tabtransformer.py`): applies attention over categorical embeddings, then combines with numeric features.
+
+9) **Merge all experiment logs into one file** (`export_results.py`)
    - Writes the single canonical results sheet: `results_all.csv` (tracked for GitHub).
 
 ## 2) Data used (how many homes?)
@@ -195,9 +204,12 @@ These are the best runs we logged with `test_acc_pct` available (note: many swee
 
 | Model | Feature set | Train rows | Test accuracy % | Test RMSE(log) | Notes |
 |---|---|---:|---:|---:|---|
+| Constant (train-mean log1p) | full | 418,549 | 66.10 | 0.5618 | Sanity-check floor |
 | Hedonic (linear fixed effects) | full | 418,549 | 87.74 | 0.2428 | Full-train baseline |
 | ANN (full train, best single run) | full | 418,549 | 92.62 | 0.1433 | `512→256→128→64`, `dropout=0.1` |
 | DeepFM (full train, single run) | full | 418,549 | 91.00 | 0.1791 | `k=16`, `2048→1024→512`, `dropout=0.05` |
+| FT-Transformer (full train) | full | 418,549 | 91.42 | 0.1669 | Transformer attention baseline (slower on CPU) |
+| TabTransformer (full train) | full | 418,549 | 88.97 | 0.1997 | Attention over categorical embeddings |
 | ANN sweep (deep_test, 100 runs) | full | 50,000 | 88.02 | 0.2564 | Best config: `huge3` (2048→1024→512) |
 | FM sweep (100 runs) | full | 50,000 | 88.33 | 0.4056 | Higher median accuracy, but much worse tail error (RMSE) |
 | DeepFM sweep (200 runs) | full | 50,000 | 89.70 | 0.2851 | Best config: `huge` + `k=16` + deep MLP (2048→1024→512) |

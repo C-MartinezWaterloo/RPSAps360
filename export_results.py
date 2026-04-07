@@ -73,6 +73,8 @@ def _ensure_defaults(row: dict) -> None:
             row["stage"] = "tabnet"
         elif source in {"train_fttransformer", "sweep_fttransformer"}:
             row["stage"] = "fttransformer"
+        elif source in {"train_tabtransformer", "sweep_tabtransformer"}:
+            row["stage"] = "tabtransformer"
         elif source in {"eval_suite"}:
             row["stage"] = "robustness"
         elif source in {"xgboost"}:
@@ -94,6 +96,8 @@ def _ensure_defaults(row: dict) -> None:
             row["model"] = "tabnet"
         elif source in {"train_fttransformer", "sweep_fttransformer"}:
             row["model"] = "fttransformer"
+        elif source in {"train_tabtransformer", "sweep_tabtransformer"}:
+            row["model"] = "tabtransformer"
         elif source in {"eval_suite"}:
             # Model should already be present, but keep a safe default.
             row["model"] = str(row.get("model", "")).strip() or "unknown"
@@ -473,6 +477,21 @@ def main() -> None:
     for path in sorted(root.glob("fttransformer_sweep*.csv")):
         for row in _load_csv_rows(path):
             row.setdefault("source", "sweep_fttransformer")
+            row.setdefault("run_group", path.stem)
+            _ensure_defaults(row)
+            rows_all.append(row)
+
+    # 9.6) TabTransformer (categorical attention baseline for tabular).
+    for path in sorted(root.glob("tabtransformer_runs*.csv")):
+        for row in _load_csv_rows(path):
+            row.setdefault("source", "train_tabtransformer")
+            row.setdefault("run_group", path.stem)
+            _ensure_defaults(row)
+            rows_all.append(row)
+
+    for path in sorted(root.glob("tabtransformer_sweep*.csv")):
+        for row in _load_csv_rows(path):
+            row.setdefault("source", "sweep_tabtransformer")
             row.setdefault("run_group", path.stem)
             _ensure_defaults(row)
             rows_all.append(row)

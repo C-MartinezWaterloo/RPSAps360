@@ -11,3 +11,5 @@ Canonical results sheet (tracked on GitHub): `results_all.csv`
 - **Model 4: DeepFM (FM + MLP)** → `models/04_deepfm/README.md`
 - **Model 5: TabNet (sequential feature selection)** → `models/05_tabnet/README.md`
 - **Model 6: XGBoost (planned / external dependency)** → `models/06_xgboost/README.md`
+- **Model 7: FT-Transformer (Transformer for tabular data)** → `models/07_fttransformer/README.md`
+- **Model 8: TabTransformer (attention over categorical embeddings)** → `models/08_tabtransformer/README.md`

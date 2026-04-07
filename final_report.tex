@@ -21,6 +21,7 @@
 \usepackage{tikz}
 \usetikzlibrary{positioning,arrows.meta}
 \usepackage{pgfplots}
+\usepackage{pgfplotstable}
 \usepackage{subcaption}
 
 \pgfplotsset{compat=1.18}
@@ -82,12 +83,19 @@
 \newcommand{\TabnetTimeTestRmse}{0.4349}
 \newcommand{\TabnetTimeTestAcc}{75.08}
 
-% Transformer baseline (full features; train cap=50k; seed=42)
+% TabTransformer baseline (full features; full train; seed=42)
+\newcommand{\TabtrParams}{681{,}473}
+\newcommand{\TabtrTestRmse}{0.1997}
+\newcommand{\TabtrTestAcc}{88.97}
+\newcommand{\TabtrTimeTestRmse}{0.2730}
+\newcommand{\TabtrTimeTestAcc}{79.06}
+
+% Transformer baseline (full features; full train; seed=42)
 \newcommand{\FtParams}{617{,}409}
-\newcommand{\FtTestRmse}{0.2138}
-\newcommand{\FtTestAcc}{88.66}
-\newcommand{\FtTimeTestRmse}{0.2426}
-\newcommand{\FtTimeTestAcc}{86.63}
+\newcommand{\FtTestRmse}{0.1669}
+\newcommand{\FtTestAcc}{91.42}
+\newcommand{\FtTimeTestRmse}{0.2604}
+\newcommand{\FtTimeTestAcc}{87.71}
 
 % Feature-set ablation (single run; basic feature tensor ann_tensors.pt; random split seed=42)
 \newcommand{\BasicAnnTestRmse}{0.3088}
@@ -113,6 +121,15 @@
 \newcommand{\DeepTimeAccMean}{75.74}
 \newcommand{\DeepTimeAccStd}{1.51}
 
+% Qualitative plot data (auto-generated; keeps the main report readable)
+\newif\ifannqual
+\IfFileExists{ann_qual_data.tex}{
+  \annqualtrue
+  \input{ann_qual_data.tex}
+}{
+  \annqualfalse
+}
+
 \title{House Price Prediction with Neural Tabular Models\\
 \vspace{-2mm}
 \large Hedonic Baseline vs Embedding+MLP ANN (APS360 Final Report)}
@@ -125,7 +142,7 @@
 \maketitle
 
 \begin{abstract}
-We predict housing \texttt{TransactionPrice} from tabular transaction records using neural models that combine standardized numeric features with learned embeddings for high-cardinality categoricals. Across \NTotal cleaned transactions, our embedding+MLP ANN substantially improves over both a classic hedonic regression baseline and a DeepFM neural baseline. On \textbf{random splits} (21 robustness runs), ANN achieves \AnnRandRmseMean\(\pm\)\AnnRandRmseStd test RMSE(log) and \AnnRandAccMean\(\pm\)\AnnRandAccStd\% accuracy, vs hedonic \HedRandRmseMean\(\pm\)\HedRandRmseStd RMSE(log) and \HedRandAccMean\(\pm\)\HedRandAccStd\% accuracy. To evaluate performance on \textbf{new} samples, we use a \textbf{time-based split} (train early years \(\rightarrow\) test later years), where the ANN remains stronger: \AnnTimeRmseMean\(\pm\)\AnnTimeRmseStd RMSE(log) and \AnnTimeAccMean\(\pm\)\AnnTimeAccStd\% accuracy.
+We predict housing \texttt{TransactionPrice} from tabular transaction records using neural models that combine standardized numeric features with learned embeddings for high-cardinality categoricals. Across \NTotal cleaned transactions, our embedding+MLP ANN substantially improves over a classic hedonic regression baseline and is competitive with interaction/attention baselines (FM, DeepFM, TabNet, TabTransformer, FT-Transformer). On \textbf{random splits} (21 robustness runs), ANN achieves \AnnRandRmseMean\(\pm\)\AnnRandRmseStd test RMSE(log) and \AnnRandAccMean\(\pm\)\AnnRandAccStd\% accuracy, vs hedonic \HedRandRmseMean\(\pm\)\HedRandRmseStd RMSE(log) and \HedRandAccMean\(\pm\)\HedRandAccStd\% accuracy. To evaluate performance on \textbf{new} samples, we use a \textbf{time-based split} (train early years \(\rightarrow\) test later years); the ANN remains clearly better than hedonic regression: \AnnTimeRmseMean\(\pm\)\AnnTimeRmseStd RMSE(log) and \AnnTimeAccMean\(\pm\)\AnnTimeAccStd\% accuracy.
 \end{abstract}
 
 \section{Introduction (motivation + goal)}
@@ -171,6 +188,7 @@ Accurate home price estimates are useful for appraisal, market analytics, and de
   \item \textbf{Factorization Machines (FM)} represent pairwise feature interactions with low-rank factors, often effective for sparse/high-cardinality settings (\cite{rendle2010fm}).
   \item \textbf{DeepFM} combines linear terms, FM interactions, and a deep MLP to capture both low- and high-order effects in tabular data (\cite{guo2017deepfm}).
   \item \textbf{TabNet} uses attentive feature selection and sparse masks as an alternative inductive bias for tabular learning (\cite{arik2019tabnet}).
+  \item \textbf{TabTransformer} applies self-attention to contextualize categorical embeddings for tabular prediction (\cite{huang2020tabtransformer}).
   \item \textbf{FT-Transformer} tokenizes features and applies Transformer self-attention for tabular prediction (\cite{gorishniy2021revisiting}).
   \item \textbf{Gradient-boosted trees} (XGBoost/LightGBM) are widely used strong baselines for tabular regression/classification (\cite{chen2016xgboost,ke2017lightgbm}).
 \end{itemize}
@@ -244,17 +262,18 @@ For high-cardinality categoricals (e.g., city/style), one-hot is impractical, so
 \subsection{Additional neural baseline: DeepFM}
 DeepFM combines (i) linear terms, (ii) low-rank pairwise interactions (FM), and (iii) a deep MLP over numeric features plus categorical factor embeddings. Our best DeepFM uses factor dimension \(k=16\), hidden sizes \(2048\rightarrow1024\rightarrow512\), dropout 0.05, AdamW \(lr=0.002\), weight decay \(0.001\), batch size 4096, and 40 epochs (checkpoint by validation MSE).
 
-\subsection{Additional baselines: FM, TabNet, FT-Transformer}
-\textbf{FM} models all pairwise feature interactions via low-rank factors, often strong for sparse/high-cardinality problems. \textbf{TabNet} uses sequential attentive feature selection with sparse masks. \textbf{FT-Transformer} tokenizes each feature into a vector and applies self-attention to learn cross-feature interactions.
+\subsection{Additional baselines: FM, TabNet, TabTransformer, FT-Transformer}
+\textbf{FM} models all pairwise feature interactions via low-rank factors, often strong for sparse/high-cardinality problems. \textbf{TabNet} uses sequential attentive feature selection with sparse masks. \textbf{TabTransformer} applies self-attention to categorical embeddings (contextualizing categories using other columns) and then predicts with an MLP. \textbf{FT-Transformer} tokenizes each feature into a vector and applies self-attention to learn cross-feature interactions (ours: \(d=64\), 3 layers, 4 heads, ff-mult 4, dropout 0.1, AdamW \(lr=10^{-3}\), \(wd=10^{-4}\), batch 2048, 6 epochs).
 
 \section{Evaluation protocol and metrics}
-\textbf{Train/val/test splits.} We use (i) a standard 70/15/15 random split and report robustness by repeating over multiple model seeds and split seeds, and (ii) a time-based split that sorts by (\texttt{TransactionYear}, \texttt{Quarter}) and partitions 70/15/15 by time order (with a seeded random tiebreak within the same year/quarter). We tune using validation only and treat the test split as a one-time evaluation.
+\textbf{Train/val/test splits.} We use (i) a standard 70/15/15 random split and report robustness by repeating over multiple model seeds and split seeds, and (ii) a time-based split that sorts by (\texttt{TransactionYear}, \texttt{Quarter}) and partitions 70/15/15 by time order (with a seeded random tiebreak within the same year/quarter). All reported results use the full training split (no max-sample cap) unless explicitly stated. We tune using validation only and treat the test split as a one-time evaluation.
 
 \textbf{Metrics.} We train on log-space MSE and report RMSE(log). For interpretability, we also report MdAPE in price space and a derived accuracy:
 \(\mathrm{Acc}\%=\max(0,100(1-\mathrm{MdAPE}))\).
 
 \section{Quantitative results}
 \textbf{Sanity-check floor.} A constant predictor (train-mean \(\log(1+\text{price})\)) achieves \NaiveMeanRmse test RMSE(log) and \NaiveMeanAcc\% accuracy on the random split, confirming the task is non-trivial.
+\textbf{All models.} Table~\ref{tab:all-models} summarizes performance for all tested baselines, including interaction models (FM/DeepFM), attention-based TabNet, and transformer-based TabTransformer/FT-Transformer.
 
 \begin{table*}[t]
 \centering
@@ -268,13 +287,14 @@ Constant (mean) & 0 & \NaiveMeanRmse & \NaiveMeanAcc & -- & -- \\
 Hedonic & 7{,}254 & \HedRandRmseMean\(\pm\)\HedRandRmseStd & \HedRandAccMean\(\pm\)\HedRandAccStd & \HedTimeRmseMean\(\pm\)\HedTimeRmseStd & \HedTimeAccMean\(\pm\)\HedTimeAccStd \\
 FM (2-way) & \FmParams & \FmTestRmse & \FmTestAcc & \FmTimeTestRmse & \FmTimeTestAcc \\
 TabNet & \TabnetParams & \TabnetTestRmse & \TabnetTestAcc & \TabnetTimeTestRmse & \TabnetTimeTestAcc \\
+TabTransformer & \TabtrParams & \TabtrTestRmse & \TabtrTestAcc & \TabtrTimeTestRmse & \TabtrTimeTestAcc \\
 FT-Transformer & \FtParams & \FtTestRmse & \FtTestAcc & \FtTimeTestRmse & \FtTimeTestAcc \\
 DeepFM & 3{,}146{,}151 & \DeepRandRmseMean\(\pm\)\DeepRandRmseStd & \DeepRandAccMean\(\pm\)\DeepRandAccStd & \DeepTimeRmseMean\(\pm\)\DeepTimeRmseStd & \DeepTimeAccMean\(\pm\)\DeepTimeAccStd \\
 ANN (embed+MLP) & \AnnParams & \AnnRandRmseMean\(\pm\)\AnnRandRmseStd & \AnnRandAccMean\(\pm\)\AnnRandAccStd & \AnnTimeRmseMean\(\pm\)\AnnTimeRmseStd & \AnnTimeAccMean\(\pm\)\AnnTimeAccStd \\
 \bottomrule
 \end{tabular}
 \vspace{-2mm}
-\caption{Performance summary on the full feature set. ANN/Hedonic are averaged over robustness runs (random: 21; time: 9). DeepFM is averaged over 3 full-train seeds (0/1/42). FM and TabNet are single full-train runs (seed=42). FT-Transformer is a single run (seed=42) trained with a 50k train cap for CPU feasibility.}
+\caption{Performance summary on the full feature set (no training cap). ANN/Hedonic are averaged over robustness runs (random: 21; time: 9). DeepFM is averaged over 3 full-train seeds (0/1/42). FM, TabNet, TabTransformer, and FT-Transformer are single full-train runs (seed=42).}
 \label{tab:all-models}
 \end{table*}
 
@@ -432,7 +452,11 @@ ANN (embed+MLP) & \AnnParams & \AnnRandRmseMean\(\pm\)\AnnRandRmseStd & \AnnRand
 \end{figure*}
 
 \section{Qualitative results (sample predictions)}
-To contextualize quantitative error, we show three test examples chosen by absolute percentage error (APE) percentiles (5th/50th/95th). This highlights both typical behavior and failure modes.
+\ifannqual
+To contextualize quantitative error, we show three test examples chosen by absolute percentage error (APE) percentiles (5th/50th/95th). On the random-split test set, the ANN’s APE distribution has median \AnnApeP50\%, p90 \AnnApeP90\%, p95 \AnnApeP95\%, and p99 \AnnApeP99\%. Figure~\ref{fig:ann-qual} visualizes predictions/residuals and shows that errors are larger for the most expensive decile (rarer, more heterogeneous properties).
+\else
+To contextualize quantitative error, we show representative test examples (Table~\ref{tab:qual}). To regenerate the qualitative plots used in this report, run \texttt{python make\_ann\_qual\_data.py --data ann\_tensors\_full.pt}.
+\fi
 \begin{table}[t]
 \centering
 \small
@@ -449,6 +473,86 @@ p95 (large error) & 260{,}000 & 334{,}129 & 28.51 \\
 \caption{Representative ANN outputs on the random-split test set. Large errors tend to occur for rare/outlier properties or distribution shifts.}
 \label{tab:qual}
 \end{table}
+
+\ifannqual
+\begin{figure}[t]
+\centering
+\begin{subfigure}{0.49\linewidth}
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=\linewidth,
+  height=3.2cm,
+  xlabel={True \(\log(1+\text{price})\)},
+  ylabel={Pred \(\log(1+\text{price})\)},
+  xmin=11.0, xmax=16.0,
+  ymin=11.0, ymax=16.0,
+  grid=both,
+  tick label style={font=\scriptsize},
+  label style={font=\scriptsize},
+  legend style={font=\scriptsize, at={(0.02,0.98)}, anchor=north west, draw=none},
+]
+\addplot+[only marks, mark=o, mark size=1.0pt, color=blue!70!black, opacity=0.55] table[x=true,y=pred] {\AnnPredScatter};
+\addlegendentry{ANN samples}
+\addplot+[domain=11:16, samples=2, color=black!60] {x};
+\addlegendentry{Ideal y=x}
+\end{axis}
+\end{tikzpicture}
+\vspace{-2mm}
+\caption{Predicted vs true (160 sampled test points).}
+\end{subfigure}
+\hfill
+\begin{subfigure}{0.49\linewidth}
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  ybar,
+  width=\linewidth,
+  height=3.2cm,
+  bar width=5pt,
+  xlabel={Residual (pred$-$true) in \(\log(1+\text{price})\)},
+  ylabel={Count},
+  xmin=-1.05, xmax=1.05,
+  ymajorgrids=true,
+  tick label style={font=\scriptsize},
+  label style={font=\scriptsize},
+]
+\addplot+[fill=blue!18, draw=blue!60!black] table[x=center,y=count] {\AnnResidHist};
+\end{axis}
+\end{tikzpicture}
+\vspace{-2mm}
+\caption{Residual histogram (full test set).}
+\end{subfigure}
+
+\vspace{1mm}
+
+\begin{subfigure}{\columnwidth}
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=\linewidth,
+  height=2.6cm,
+  xlabel={True-price decile (1=lowest, 10=highest)},
+  ylabel={Accuracy (\%)},
+  xmin=1, xmax=10,
+  ymin=87, ymax=95,
+  xtick={1,2,3,4,5,6,7,8,9,10},
+  grid=both,
+  tick label style={font=\scriptsize},
+  label style={font=\scriptsize},
+]
+\addplot+[mark=*, mark size=1.2pt, color=purple!70!black] table[x=decile,y=acc] {\AnnByPriceDecile};
+\end{axis}
+\end{tikzpicture}
+\vspace{-2mm}
+\caption{Accuracy by true-price decile (random-split test set).}
+\end{subfigure}
+
+\vspace{-2mm}
+\caption{Qualitative diagnostics for the ANN (illustrative run; random split, seed=42, best epoch by validation MSE).}
+\label{fig:ann-qual}
+\end{figure}
+\fi
 
 \section{Evaluation on new data (time-based split)}
 \begin{figure}[t]
@@ -487,15 +591,15 @@ p95 (large error) & 260{,}000 & 334{,}129 & 28.51 \\
 We evaluate generalization to \emph{new} samples via a time split: we order transactions by (\texttt{TransactionYear}, \texttt{Quarter}) and split 70/15/15 by time (train early \(\rightarrow\) test late), so the test set is chronologically ``future'' relative to training. With our time-split procedure (fixed \texttt{split\_seed}), train ends at \textbf{2016Q2}, validation ends at \textbf{2017Q4}, and the test set is mostly \textbf{2018--2019} transactions (Figure~\ref{fig:market-drift}). We keep model hyperparameters fixed (chosen via validation) and do not tune on the time-test labels. To reduce the chance of reporting a lucky initialization, we repeat runs across multiple seeds and report mean \(\pm\) std. Figure~\ref{fig:results} (bottom row) shows that although all models degrade under distribution shift, the ANN retains a large advantage over the hedonic baseline.
 
 \section{Discussion (what we learned)}
-\begin{figure}[t]
+\begin{figure*}[t]
 \centering
-\begin{subfigure}{\columnwidth}
+\begin{subfigure}{0.32\linewidth}
 \centering
 \begin{tikzpicture}
 \begin{axis}[
   ybar,
   width=\linewidth,
-  height=2.5cm,
+  height=2.7cm,
   bar width=14pt,
   ylabel={Test RMSE(log)},
   symbolic x coords={Basic,Full},
@@ -517,16 +621,14 @@ We evaluate generalization to \emph{new} samples via a time split: we order tran
 \caption{Feature-set ablation (seed=42): \texttt{basic} uses attributes only; \texttt{full} adds location+time.}
 \label{fig:ablation}
 \end{subfigure}
-
-\vspace{-1mm}
-
-\begin{subfigure}{\columnwidth}
+\hfill
+\begin{subfigure}{0.32\linewidth}
 \centering
 \begin{tikzpicture}
 \begin{axis}[
   xbar,
   width=\linewidth,
-  height=3.3cm,
+  height=2.7cm,
   xlabel={Increase in validation MSE (Δval MSE)},
   ytick=data,
   y dir=reverse,
@@ -561,17 +663,47 @@ We evaluate generalization to \emph{new} samples via a time split: we order tran
 \caption{Permutation importance on a random-split validation subset (20k rows; split\_seed=42).}
 \label{fig:feature-importance}
 \end{subfigure}
+\hfill
+\begin{subfigure}{0.32\linewidth}
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  xbar,
+  width=\linewidth,
+  height=3.0cm,
+  xlabel={Time-split test RMSE(log)},
+  symbolic y coords={FT-Transformer,TabTransformer,ANN,DeepFM,TabNet,FM,Hedonic},
+  ytick=data,
+  y dir=reverse,
+  xmin=0.20, xmax=0.65,
+  grid=both,
+  tick label style={font=\scriptsize},
+  label style={font=\scriptsize},
+]
+\addplot+[fill=teal!25, draw=teal!70!black] coordinates {(\FtTimeTestRmse,FT-Transformer)};
+\addplot+[fill=violet!20, draw=violet!60!black] coordinates {(\TabtrTimeTestRmse,TabTransformer)};
+\addplot+[fill=blue!30, draw=blue!70!black] coordinates {(\AnnTimeRmseMean,ANN)};
+\addplot+[fill=green!30, draw=green!60!black] coordinates {(\DeepTimeRmseMean,DeepFM)};
+\addplot+[fill=red!20, draw=red!60!black] coordinates {(\TabnetTimeTestRmse,TabNet)};
+\addplot+[fill=purple!20, draw=purple!60!black] coordinates {(\FmTimeTestRmse,FM)};
+\addplot+[fill=orange!30, draw=orange!70!black] coordinates {(\HedTimeRmseMean,Hedonic)};
+\end{axis}
+\end{tikzpicture}
+\vspace{-2mm}
+\caption{New-data proxy: time-split RMSE(log) across all models (Table~\ref{tab:all-models}).}
+\label{fig:time-all-models}
+\end{subfigure}
 
 \vspace{-2mm}
-\caption{Analysis: richer features yield large gains (top), and size, time, and location dominate ANN predictions (bottom).}
+\caption{Analysis: feature richness matters (left), the ANN relies heavily on size/time/location (middle), and time-based evaluation changes the model ranking (right).}
 \label{fig:analysis}
-\end{figure}
+\end{figure*}
 
 \begin{itemize}
   \item \textbf{Feature set drives performance.} Feature richness is critical: moving from \texttt{basic} (attributes only) to \texttt{full} (adds location+time) cuts ANN test RMSE(log) from \BasicAnnTestRmse\(\rightarrow\)\AnnTestRmse and raises accuracy from \BasicAnnTestAcc\(\rightarrow\)\AnnTestAcc\% (Figure~\ref{fig:ablation}); hedonic regression also improves (\BasicHedTestRmse\(\rightarrow\)\HedTestRmse).
   \item \textbf{What the model uses.} Permutation importance (Figure~\ref{fig:feature-importance}) shows that size (\texttt{LivingArea}), market trend (\texttt{TransactionYear}), and location (\texttt{FSA}/\texttt{gcode\_City}) are dominant drivers, matching domain intuition.
-  \item \textbf{ANN vs baselines.} FM improves over hedonic regression by adding pairwise interactions, but the ANN (and DeepFM) is strongest overall (Table~\ref{tab:all-models}), suggesting nonlinear embeddings + deeper interaction modeling matter. TabNet underperforms in our setting, highlighting sensitivity to optimization/hyperparameters for this dataset.
-  \item \textbf{New-data behavior.} Time splits are harder due to distribution shift; the ANN remains meaningfully better than hedonic regression, suggesting the improvement is not only due to random mixing across years.
+  \item \textbf{ANN vs baselines.} FM improves over hedonic regression by adding pairwise interactions. DeepFM, TabTransformer, and FT-Transformer are strong neural baselines, but the ANN remains best on random splits (Table~\ref{tab:all-models}). On the time split, FT-Transformer and TabTransformer are competitive in our single runs (\FtTimeTestRmse, \TabtrTimeTestRmse), suggesting attention-based models may help under distribution shift (though multi-seed runs would be needed for a fair robustness comparison). TabNet underperforms in our setting, highlighting sensitivity to optimization/hyperparameters for this dataset.
+  \item \textbf{New-data behavior.} Time splits are harder due to distribution shift; the ANN remains meaningfully better than hedonic regression (Figure~\ref{fig:time-all-models}), suggesting the improvement is not only due to random mixing across years.
   \item \textbf{Failure modes.} Large errors are concentrated in rare/outlier properties and in shifted market segments; these motivate stricter time-aware evaluation and out-of-distribution monitoring for deployment.
 \end{itemize}
 
@@ -579,9 +711,9 @@ We evaluate generalization to \emph{new} samples via a time split: we order tran
 Housing prices encode socioeconomic inequities; a model can reproduce or amplify them if used for lending, insurance, or neighborhood ``risk'' scoring. Privacy also matters: we avoid address-level identifiers and recommend strict access controls, drift monitoring, and transparent limitations (e.g., out-of-distribution detection) for any real use.
 
 \section{Project difficulty / quality}
-This project is challenging due to the dataset scale (\(\sim\)600k rows), heavy-tailed targets, missingness, distribution shift across time, and high-cardinality categoricals. Beyond a single model, we implemented multiple baselines (hedonic regression, FM, DeepFM, TabNet, FT-Transformer), consolidated results into a single experiment log, and evaluated robustness across multiple seeds and both random and time splits. The final ANN performs better than expected for this setting while remaining feasible to train (\(\approx\)\AnnParams parameters).
+This project is challenging due to the dataset scale (\(\sim\)600k rows), heavy-tailed targets, missingness, distribution shift across time, and high-cardinality categoricals. Beyond a single model, we implemented multiple baselines (hedonic regression, FM, DeepFM, TabNet, TabTransformer, FT-Transformer), consolidated results into a single experiment log, and evaluated robustness across multiple seeds and both random and time splits. The final ANN performs better than expected for this setting while remaining feasible to train (\(\approx\)\AnnParams parameters).
 
-\begin{thebibliography}{9}
+\begin{thebibliography}{10}
 \bibitem{rosen1974hedonic}
 Sherwin Rosen.
 \newblock Hedonic Prices and Implicit Markets: Product Differentiation in Pure Competition.
@@ -601,6 +733,11 @@ Huifeng Guo, Ruiming Tang, Yunming Ye, Zhenguo Li, Xiuqiang He.
 Sercan O. Arik, Tomas Pfister.
 \newblock TabNet: Attentive Interpretable Tabular Learning.
 \newblock \emph{arXiv:1908.07442}, 2019.
+
+\bibitem{huang2020tabtransformer}
+Xin Huang et al.
+\newblock TabTransformer: Tabular Data Modeling Using Contextual Embeddings.
+\newblock \emph{arXiv:2012.06678}, 2020.
 
 \bibitem{gorishniy2021revisiting}
 Yury Gorishniy, Ivan Rubachev, Valentin Khrulkov, Artem Babenko.

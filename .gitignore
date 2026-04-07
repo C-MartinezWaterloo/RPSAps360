@@ -28,6 +28,8 @@ tabnet_runs*.csv
 tabnet_sweep*.csv
 fttransformer_runs*.csv
 fttransformer_sweep*.csv
+tabtransformer_runs*.csv
+tabtransformer_sweep*.csv
 eval_runs*.csv
 feature_importance*.csv
 xgb_runs*.csv
@@ -38,6 +40,7 @@ ann_all_results.xlsx
 # Generated report visuals
 plots/
 report_graphs*.html
+overleaf_bundle*.zip
 
 # LaTeX build artifacts
 *.aux
